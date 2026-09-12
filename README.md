@@ -1,8 +1,8 @@
-# H3 导演台 · H3 Director Console
+# 视频规划师 · Video Planner
 
-> 一个基于 ComfyUI V3 节点 API 的多段音视频导演台，编排官方 MiniMax H3 节点，把「时间轴 + 分段脚本 + 参考素材」变成一条完整成片。
+> 一个基于 ComfyUI V3 节点 API 的多段音视频规划工具，编排官方 MiniMax H3 节点，把「时间轴 + 分段脚本 + 参考素材」变成一条完整成片。
 >
-> A ComfyUI V3 native multi-segment audio/video director console that orchestrates the official MiniMax H3 nodes, turning a timeline of segment scripts and reference materials into a finished film.
+> A ComfyUI V3 native multi-segment audio/video planner that orchestrates the official MiniMax H3 nodes, turning a timeline of segment scripts and reference materials into a finished film.
 
 **语言 / Language：** [🇨🇳 简体中文](#简体中文) ｜ [🇬🇧 English](#english)
 
@@ -49,7 +49,7 @@
 
 ### 简介
 
-**H3 导演台** 是一款 ComfyUI 自定义节点插件，把「多段时间轴」+「逐段脚本」+「参考素材」组织成一次完整的视频生成任务。它不重造扩散/采样轮子，而是**编排** ComfyUI 官方的 MiniMax H3 节点（`MiniMaxH3ImageToVideo` / `MiniMaxH3ReferenceToVideo` / `MiniMaxH3SigmaShift` / `MiniMaxH3AddGuide`），逐段生成、段间连续、拼接成片。
+**视频规划师** 是一款 ComfyUI 自定义节点插件，把「多段时间轴」+「逐段脚本」+「参考素材」组织成一次完整的视频生成任务。它不重造扩散/采样轮子，而是**编排** ComfyUI 官方的 MiniMax H3 节点（`MiniMaxH3ImageToVideo` / `MiniMaxH3ReferenceToVideo` / `MiniMaxH3SigmaShift` / `MiniMaxH3AddGuide`），逐段生成、段间连续、拼接成片。
 
 一个主节点（`H3DYT_Director`）+ 底部状态栏富编辑器 + 节点内多段时间轴，覆盖 6 种任务：
 
@@ -80,20 +80,20 @@
 
 #### 1. 装配节点
 
-在 ComfyUI 工作流中新增 **`H3导演台`**（node_id：`H3DYT_Director`），连接四路输入：
+在 ComfyUI 工作流中新增 **`视频规划师`**（node_id：`H3DYT_Director`），连接四路输入：
 
 ```
-Model 模型          →  H3导演台.模型
-VAE   视频VAE       →  H3导演台.视频VAE
-VAE   音频VAE       →  H3导演台.音频VAE
-CLIP  (type=minimax, Qwen3-VL) → H3导演台.CLIP编码器
+Model 模型          →  视频规划师.模型
+VAE   视频VAE       →  视频规划师.视频VAE
+VAE   音频VAE       →  视频规划师.音频VAE
+CLIP  (type=minimax, Qwen3-VL) → 视频规划师.CLIP编码器
 ```
 
 输出：`图像 [T,H,W,C]` / `音频` / `帧率 FLOAT` / `帧数 INT` / `报告 STRING`，可直接接 `SaveVideo` / `PreviewVideo` 等下游节点。
 
 #### 2. 状态栏编辑
 
-插件加载后，ComfyUI **底部状态栏**会自动出现「H3 导演台」面板，包含：
+插件加载后，ComfyUI **底部状态栏**会自动出现「视频规划师」面板，包含：
 
 - **生成类型选择**：切换 t2v/i2v/fl2v/r2v/v2v/rv2v；
 - **提示词编辑器**：全局提示词（画风 + 预设正文自动拼接）；
@@ -220,35 +220,26 @@ pip install -r requirements.txt
 
 **验证安装**：
 
-- ComfyUI 启动日志应出现 `[H3导演台] ...`（若节点/路由导入失败会 warning，但插件本体不会崩溃）；
-- 在节点搜索框输入 `H3导演台` 或 `H3DYT_Director` 可找到主节点；
-- ComfyUI 页面**底部状态栏**应出现 H3 导演台面板。
+- ComfyUI 启动日志应出现 `[视频规划师] ...`（若节点/路由导入失败会 warning，但插件本体不会崩溃）；
+- 在节点搜索框输入 `视频规划师` 或 `H3DYT_Director` 可找到主节点；
+- ComfyUI 页面**底部状态栏**应出现视频规划师面板。
 
 ### 更新记录
 
-**v1（当前，已完成）**
-- ✅ 执行层：规划、条件组装、参考素材、采样与解码、段间连续、段缓存、模型缓存、官方管线适配、显存清理、执行核心主循环；
-- ✅ 后端路由：媒体上传（原子改名 + 去重）、预设选项；
-- ✅ 前端：状态栏入口、6 个组件（状态栏面板 / 生成类型选择 / 提示词编辑器 / 画风预设选择 / 参考文件区 / 时间轴面板）+ 桥接层；
-- ✅ 分辨率 → 画布推导（8 档宽高比 × 百万像素 0.1–4.0）；
-- ✅ 步数/采样器/调度器 widget 化；
-- ✅ 画风 + 预设 txt 库下拉；
-- ✅ `pytest 测试/` **142 passed** / ruff clean；
-- ✅ 完整技术文档（`文档/技术实现/00–12`）。
+**2026-09-13**
+- 更新技术文档。
 
-**v2（计划中，仅常量占位）**
-- ⏳ LLM 规划器（`规划/方法论.py`：黄金3秒 / 钩子 / 情绪曲线 / CTA）；
-- ⏳ LLM 提示词增强（下沉到每段 visual）；
-- ⏳ Refine 二采（一采草稿 + 二采精修）；
-- ⏳ 工程包（Director Pack）导入导出；
-- ⏳ 「清理段缓存」按钮 + 容量淘汰策略；
-- ⏳ 上传大小上限（`H3_媒体最大字节`）；
-- ⏳ 去重键升级为内容哈希。
+**2026-09-12**
+- 修复音频素材加载失败的问题。
+- 修复新增段时任务类型不正确的问题。
+- 创建项目说明文档。
 
-**backlog（已知不阻断）**
-- `执行/模型缓存.py` 已实现且有单测，但尚未接入执行核心主循环；
-- `节点公用.校验画布` 已不再被 `validate_inputs` 调用（宽/高 widget 已删），注释待清理；
-- 面板 ↔ 状态桥 ↔ 时间轴三处订阅双渲染，时间轴一侧已收窄，其余两处待办。
+**v1（已完成）**
+- 多段视频生成、段间平滑衔接、生成结果缓存、参考素材管理、分辨率选择、画风预设、媒体上传、时间轴编辑器。
+- 142 个测试通过。
+
+**v2（计划中）**
+- AI 自动规划、提示词优化、二次精修、工程导入导出、缓存清理。
 
 ### 欢迎建议
 
@@ -273,7 +264,7 @@ pip install -r requirements.txt
 
 ### Introduction
 
-**H3 Director Console** is a ComfyUI custom-node plugin that organizes a **multi-segment timeline**, **per-segment scripts** and **reference materials** into a single video-generation job. It does **not** reinvent diffusion or sampling — instead it **orchestrates** the official MiniMax H3 nodes (`MiniMaxH3ImageToVideo` / `MiniMaxH3ReferenceToVideo` / `MiniMaxH3SigmaShift` / `MiniMaxH3AddGuide`), running them segment by segment, chaining continuity across segments, and stitching everything into a finished film.
+**Video Planner** is a ComfyUI custom-node plugin that organizes a **multi-segment timeline**, **per-segment scripts** and **reference materials** into a single video-generation job. It does **not** reinvent diffusion or sampling — instead it **orchestrates** the official MiniMax H3 nodes (`MiniMaxH3ImageToVideo` / `MiniMaxH3ReferenceToVideo` / `MiniMaxH3SigmaShift` / `MiniMaxH3AddGuide`), running them segment by segment, chaining continuity across segments, and stitching everything into a finished film.
 
 One main node (`H3DYT_Director`) + a bottom status-bar rich editor + an in-node multi-segment timeline, covering six task types:
 
@@ -304,20 +295,20 @@ One main node (`H3DYT_Director`) + a bottom status-bar rich editor + an in-node 
 
 #### 1. Wire the node
 
-Add **`H3导演台`** (node_id: `H3DYT_Director`) to your workflow and connect four inputs:
+Add **`视频规划师`** (node_id: `H3DYT_Director`) to your workflow and connect four inputs:
 
 ```
-Model              → H3导演台.模型
-VAE (video)        → H3导演台.视频VAE
-VAE (audio)        → H3导演台.音频VAE
-CLIP (type=minimax, Qwen3-VL) → H3导演台.CLIP编码器
+Model              → 视频规划师.模型
+VAE (video)        → 视频规划师.视频VAE
+VAE (audio)        → 视频规划师.音频VAE
+CLIP (type=minimax, Qwen3-VL) → 视频规划师.CLIP编码器
 ```
 
 Outputs: `IMAGE [T,H,W,C]` / `AUDIO` / `FLOAT fps` / `INT frame_count` / `STRING report` — plug directly into `SaveVideo` / `PreviewVideo` etc.
 
 #### 2. Use the status-bar editor
 
-Once loaded, ComfyUI's **bottom status bar** shows an "H3 Director Console" panel containing:
+Once loaded, ComfyUI's **bottom status bar** shows a "Video Planner" panel containing:
 
 - **Generation type selector** — switch among t2v/i2v/fl2v/r2v/v2v/rv2v;
 - **Prompt editor** — global prompt (auto-concatenated from style + preset body);
@@ -444,35 +435,26 @@ pip install -r requirements.txt   # only if you need the optional extras
 
 **Verify**:
 
-- Startup log should contain `[H3导演台] ...` lines (warnings on node/route import failure are non-fatal);
-- Search `H3导演台` or `H3DYT_Director` in the node picker;
-- The **bottom status bar** should show the H3 Director panel.
+- Startup log should contain `[视频规划师] ...` lines (warnings on node/route import failure are non-fatal);
+- Search `视频规划师` or `H3DYT_Director` in the node picker;
+- The **bottom status bar** should show the Video Planner panel.
 
 ### Changelog
 
-**v1 (current, shipped)**
-- ✅ Execution layer: planning, condition assembly, references, sampling/decoding, continuity, segment cache, model cache, official-pipeline adapter, VRAM cleanup, main loop;
-- ✅ Backend routes: media upload (atomic rename + dedup), preset options;
-- ✅ Frontend: status-bar entry, six components (status-bar panel / gen-type selector / prompt editor / style-preset picker / reference-file area / timeline panel) + bridge layer;
-- ✅ Resolution → canvas derivation (8 aspect ratios × 0.1–4.0 megapixels);
-- ✅ Steps / sampler / scheduler exposed as widgets;
-- ✅ Style + preset txt library dropdown;
-- ✅ `pytest 测试/` — **142 passed** / ruff clean;
-- ✅ Full technical docs (`文档/技术实现/00–12`).
+**2026-09-13**
+- Updated technical documentation.
 
-**v2 (planned, only constants stubbed)**
-- ⏳ LLM planner (`规划/方法论.py`: Golden-3-Seconds / hooks / emotion curve / CTA);
-- ⏳ LLM prompt enhancement pushed down to per-segment `visual`;
-- ⏳ Refine second pass (draft + refine);
-- ⏳ Director Pack import/export;
-- ⏳ "Clear segment cache" button + capacity eviction policy;
-- ⏳ Upload size cap (`H3_媒体最大字节`);
-- ⏳ Dedup key upgraded to content hash.
+**2026-09-12**
+- Fixed audio reference loading failures.
+- Fixed incorrect task type for new segments.
+- Created project README.
 
-**Backlog (non-blocking)**
-- `执行/模型缓存.py` implemented & unit-tested but not yet wired into the main loop;
-- `节点公用.校验画布` no longer called from `validate_inputs` (width/height widgets removed); comment cleanup pending;
-- Panel ⇄ state-bridge ⇄ timeline triple subscription double-render — timeline side already narrowed, other two pending.
+**v1 (shipped)**
+- Multi-segment video generation, smooth segment transitions, result caching, reference materials, resolution picker, style presets, media upload, timeline editor.
+- 142 tests passing.
+
+**v2 (planned)**
+- AI planning, prompt enhancement, refine pass, project import/export, cache cleanup.
 
 ### Feedback & Contributions
 
