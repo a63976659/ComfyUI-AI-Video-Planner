@@ -1,0 +1,21 @@
+# H3导演台依赖说明：
+# torch / Pillow / numpy / aiohttp 由 ComfyUI 主环境提供，无需在此声明。
+# torchaudio 不再是音频加载的强依赖（已迁至 soundfile + ffmpeg 双层方案，
+# 避开 torchaudio 2.9 的 torchcodec 后端对 FFmpeg full-shared DLL 的依赖）。
+
+# 音频参考读取（r2v/v2v/rv2v 的音频参考）：soundfile（必需）
+soundfile
+
+# 以下为「可选」增强依赖，按需取消注释：
+
+# 参考视频读帧（r2v/v2v/rv2v 的视频参考）：imageio + 视频后端（二选一）
+# imageio
+# imageio-ffmpeg          # ffmpeg 后端（通用，推荐；亦作音频格式回退的 ffmpeg 可执行文件来源）
+# av                      # 或 PyAV 后端
+
+# 智能分镜（可选）：v2v/rv2v 源视频自动分段
+# scenedetect
+# opencv-python-headless
+#
+# 开发期单测：pytest（ComfyUI 运行本身不需要）
+# pytest
