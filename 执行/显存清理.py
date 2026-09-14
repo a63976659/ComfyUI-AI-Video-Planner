@@ -6,8 +6,22 @@ import logging
 _日志 = logging.getLogger("H3导演台.显存清理")
 
 
-def 清理显存(激进: bool = False):
+def 清理显存(激进: bool = False, 归还缓存: bool = True):
+    """段间/轮末显存清理，降低多段连跑 OOM 风险。
+
+    归还缓存=False → 只做 gc.collect()，不把 torch 分配器的保留块还给驱动。用于「下一段
+    马上要重新分配同量级张量」的段间时机，理由三条：
+      1. empty_cache() 只能归还「已保留但当前未用」的块，**动不了任何存活张量**——跨段
+         真正累积的是 段产物 images/audio，那要靠 gc 掉引用才可能释放，与 empty_cache 无关；
+      2. 模型的显存腾挪本就由宿主 comfy.model_management.free_memory() 在每次
+         load_models_gpu 时负责（它按 sys.getrefcount 排序卸载），不需要我方代劳；
+      3. 归还后下一段的分配只能重新 cudaMalloc，Windows/WDDM 下还伴随隐式同步 → 纯负优化。
+    真正该归还的时机是整轮结束（把池子交还下游节点/其他工作流），由调用方以缺省
+    归还缓存=True 触发。激进 仅表示额外做 ipc_collect（语义不变）。
+    """
     gc.collect()
+    if not 归还缓存:
+        return
     try:
         import torch
         if torch.cuda.is_available():

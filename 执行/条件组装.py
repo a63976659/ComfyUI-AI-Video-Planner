@@ -14,6 +14,13 @@ _管线表 = {
     **{t: "MiniMaxH3ReferenceToVideo" for t in 参考生视频任务},
 }
 
+# task → 模型槽：与 _管线表 同源分组（图生视频↔fl2va、参考生视频↔ref2va）。导演台的
+# 两个模型 socket「fl2va模型 / ref2va模型」按段任务自动匹配；槽名 → 模型输入 键 = f"{槽}_model"。
+_槽表 = {
+    **{t: "fl2va" for t in 图生视频任务},
+    **{t: "ref2va" for t in 参考生视频任务},
+}
+
 
 def _规范任务(task) -> str:
     """将入参 task 规范成小写 key；非字符串包为 ValueError，保证 Task 11 UI
@@ -29,6 +36,15 @@ def 选管线(task: str) -> str:
     if t not in _管线表:
         raise ValueError(f"未知任务类型「{t}」，合法值：{sorted(_管线表)}")
     return _管线表[t]
+
+
+def 选模型槽(task: str) -> str:
+    """task → 模型槽名（"fl2va" / "ref2va"）：与 选管线 同源分组，供导演台按段任务
+    自动匹配 fl2va模型 / ref2va模型。执行核心以 f"{槽}_model" 从 模型输入 取对应模型。"""
+    t = _规范任务(task)
+    if t not in _槽表:
+        raise ValueError(f"未知任务类型「{t}」，合法值：{sorted(_槽表)}")
+    return _槽表[t]
 
 
 def 需要首帧(task: str) -> bool:

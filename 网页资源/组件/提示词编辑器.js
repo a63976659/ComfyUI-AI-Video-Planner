@@ -1,18 +1,38 @@
 // contenteditable 提示词；@ 弹参考列表 → 插入 <Picture N>/<Audio J>/<Video K> chip；
 // 读回时把 chip 还原为标签文本（与后端 执行/参考素材.py 提取标签 对齐）。
 import { 创建画风预设选择 } from "./画风预设选择.js";
+import { app } from "../../../scripts/app.js";
 
 const 标签re = /<(Picture|Audio|Video)\s*(\d+)>/gi;
 const 单标签re = /^<(Picture|Audio|Video)\s*(\d+)>$/i;
 const 槽到标签 = { 图片: "Picture", 音频: "Audio", 视频: "Video" };
 const 标签到中文 = { Picture: "图像", Audio: "音频", Video: "视频" };
+// 标签英文名（小写）→ 素材池中文键，与后端 执行/参考素材.py `_标签到槽` 同源；审查悬空标签 据此查对应素材数。
+const 标签到槽 = { picture: "图片", audio: "音频", video: "视频" };
+
+function toast(文本) { app?.ui?.toast?.showMessage?.(文本); }
+
+// 二次确认：优先用 ComfyUI 原生确认框（extensionManager.dialog.confirm，Vue 风格、返回 Promise<bool>），
+// 宿主未提供时退回同步 window.confirm；统一以「真值=确认」返回。
+async function 弹确认(标题, 消息) {
+    const 框 = app?.extensionManager?.dialog;
+    if (框?.confirm) {
+        // 原生框：确认→true、取消/关闭→false；异常也一律按「取消」处理，绝不再弹 window.confirm 造成双框。
+        try { return !!(await 框.confirm({ title: 标题, message: 消息 })); }
+        catch { return false; }
+    }
+    return window.confirm(`${标题}\n\n${消息}`);   // 仅宿主无原生框（老版本 ComfyUI）时退回
+}
 // 输出分辨率选项：与后端 节点/节点公用.py 分辨率选项 逐字一致（单一真源在 Python，前端为镜像）。
 export const 分辨率选项 = [
     "1:1 (方形)", "2:3 (竖照片)", "3:2 (照片)", "3:4 (竖标准)",
     "4:3 (标准)", "9:16 (竖宽屏)", "16:9 (宽屏)", "21:9 (超宽屏)",
 ];
 export const 默认分辨率 = "16:9 (宽屏)";
-export const 默认百万像素 = 1.0;
+// 与后端 节点公用.默认百万像素 各存一份（JS/Python 无法共享常量），改一处必须同步另一处，
+// 否则「无选中节点时的兜底显示值」会与「新拖出节点的 widget 值」不一致。
+// 🔒 回归锁：测试/测试_常量同步.py（id `default-megapixels`）——漂移会直接红，不再靠人工核对。
+export const 默认百万像素 = 0.4;
 // 标签 → 中文显示名（<Picture 1> → 图像1）；dataset.tag 仍存原始标签，与后端提取标签对齐
 function 显示名(标签) {
     const m = 单标签re.exec(标签 || "");
@@ -35,6 +55,15 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     at按钮.onclick = () => { 编辑区.focus(); 弹参考列表(at按钮.getBoundingClientRect()); };
     工具行.appendChild(at按钮);
 
+    // 「审查标签」按钮（@ 右侧）：一键审查没有对应上传素材的悬空标签（如 <Video 1> 但未传视频），
+    // 二次确认后降级为纯文字 [Video 1]，破坏后端 提取标签 的保留 token 格式，使生成时不再被当引用、不报错。
+    const 审查按钮 = document.createElement("button");
+    审查按钮.className = "h3dyt-胶囊"; 审查按钮.type = "button";
+    审查按钮.textContent = "审查标签";
+    审查按钮.title = "一键审查：找出没有对应上传素材的悬空标签（如 <Video 1> 但未传视频），二次确认后降级为文字 [Video 1]，避免生成时报错";
+    审查按钮.onclick = 审查悬空标签;
+    工具行.appendChild(审查按钮);
+
     // @ 按钮后：输出分辨率下拉 + 百万像素数值（与参考节点前端同款，编辑节点同名 widget）
     const 控件样式 = "background:#1c1c1c;color:#ddd;border:1px solid #444;border-radius:3px";
     const 分辨率组 = document.createElement("label");
@@ -54,6 +83,9 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     百万像素组.style.cssText = "display:flex;align-items:center;gap:4px";
     百万像素组.textContent = "百万像素";
     // 滑块（0.1–4，步 0.1）+ 右侧实时读数；拖动即回写节点 widget
+    // 🔒 `max` 与下方 设百万像素() 的 `Math.min` 钳位均须 == 后端 导演台._百万像素上限（现 4）：
+    //   两处是独立字面量（滑块管拖动、钳位管回填/预设注入的程序赋值），只改其一则另一条路径
+    //   仍能越过上限。回归锁：测试/测试_常量同步.py（id `slider-max` / `clamp-math-min`）。
     const 百万像素滑 = document.createElement("input");
     百万像素滑.type = "range";
     百万像素滑.min = "0.1"; 百万像素滑.max = "4"; 百万像素滑.step = "0.1";
@@ -67,7 +99,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     工具行.append(分辨率组, 百万像素组);
 
     // 百万像素右边：画风 + 预设 两个下拉（拼接写回节点「全局提示词」widget，该 widget
-    // 在节点上已隐藏）。工具行因此有 5 组控件，窄屏靠 .h3dyt-工具行 的 flex-wrap 换行兜住。
+    // 在节点上已隐藏）。工具行因此有 6 组控件，窄屏靠 .h3dyt-工具行 的 flex-wrap 换行兜住。
     const 画风预设 = 创建画风预设选择(工具行, { 变更: 全局提示词变更 });
 
     // 编辑说明行：介绍 @ 用法等编辑方法
@@ -152,6 +184,38 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     function 取参考List_安全() {
         try { return 取参考列表?.() || { 图片: [], 音频: [], 视频: [] }; }
         catch { return { 图片: [], 音频: [], 视频: [] }; }
+    }
+
+    // 「审查标签」实现：扫描当前段提示词里的 <Picture/Video/Audio N>，凡 N 超过对应素材池数量的悬空
+    // 标签就地降级为 [Picture/Video/Audio N] 纯文字（破坏后端 提取标签 的保留格式），生成时不再被当
+    // 引用、不触发 校验标签 报错；有对应素材的标签保持为引用 chip 不动。素材池与 @ 弹层同源（全局池）。
+    // 降级前弹二次确认（列出将降级的标签），确认才改写，取消则原样不动。
+    async function 审查悬空标签() {
+        const 素材 = 取参考List_安全();
+        const 计数 = {
+            图片: (素材.图片 || []).length,
+            音频: (素材.音频 || []).length,
+            视频: (素材.视频 || []).length,
+        };
+        const 悬空 = [];
+        const 新文 = 取纯文本().replace(标签re, (整串, 类, 号) => {
+            const 槽 = 标签到槽[String(类).toLowerCase()];
+            if (parseInt(号, 10) <= (计数[槽] ?? 0)) return 整串;   // 有对应素材 → 保留为引用
+            悬空.push(整串);
+            return "[" + 整串.slice(1, -1) + "]";                   // <Video 1> → [Video 1]
+        });
+        if (!悬空.length) { toast("审查完成：没有悬空标签，所有引用都有对应素材"); return; }
+        const 次 = {};
+        悬空.forEach((t) => { 次[t] = (次[t] || 0) + 1; });
+        const 摘要 = Object.keys(次).map((t) => `${显示名(t)}${次[t] > 1 ? " ×" + 次[t] : ""}`).join("，");
+        // 二次确认：先把「将降级哪些悬空标签」摆给用户，确认后才真正改写（取消则原样不动）。
+        const 确认 = await 弹确认("降级悬空标签",
+            `发现 ${悬空.length} 处悬空标签（无对应上传素材）：${摘要}。` +
+            `\n\n将把它们从引用降级为纯文字（如 <Video 1> → [Video 1]），此后不再被当作参考素材。确认降级？`);
+        if (!确认) { toast("已取消，未作改动"); return; }
+        设值(新文);
+        变更?.(取纯文本());                                        // 写回当前段 prompt（时间轴 widget）
+        toast(`已降级 ${悬空.length} 处悬空标签为文字：${摘要}`);
     }
 
     function 插入chip(标签) {

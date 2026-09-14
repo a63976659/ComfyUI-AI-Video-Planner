@@ -16,7 +16,7 @@ export function 创建参考文件区(容器, { 变更, 共用变更 }) {
 
     function 渲染() {
         盒.innerHTML = "";
-        // 三类型横向排列：图像走九宫格（3 列），视频/音频在各自类型名下竖向排列
+        // 三类型横向排列：图像走九宫格（3 列 66px），视频/音频在各自类型名下竖向排列
         for (const 槽 of ["图片", "视频", "音频"]) {
             const 组 = document.createElement("div");
             组.className = "h3dyt-参考组";

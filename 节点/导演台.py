@@ -21,6 +21,34 @@ _百万像素上限 = 4.0                   # H3 上限收紧为 4（原 16，�
 _步数下限 = 1                        # 与 KSampler steps min 同源
 _步数上限 = 10000
 
+# 段级进度的**自有** websocket 事件名（前端 网页资源/状态栏入口.js 按字面量镜像，同步锁见
+# 测试_常量同步.py 的 test_段级进度事件名_前后端同步）。为何不能复用宿主事件，见 _广播进度 docstring。
+_进度事件名 = "h3_导演台_进度"
+
+
+def _广播进度(node_id, 当前, 总数):
+    """把段级进度推到自有 websocket 通道，供状态栏面板显示「生成中 3/7（段）」。
+
+    ⚠️ 为何必须自有通道（而非复用宿主的进度事件）：
+      • `api.execution.set_progress` 只写宿主的 progress registry（`comfy_api/latest/__init__.py`
+        的 `Execution.set_progress` 仅调 `get_progress_state().update_progress(...)`），它**不发**
+        legacy `"progress"` websocket 事件 ⇒ 只听 `"progress"` 的前端**从来收不到**我方段级进度。
+      • 发 legacy `"progress"` 的是宿主 `main.py` 里 `hijack_progress` 装的全局 hook，而 KSampler
+        的内部去噪步进正是走那条路；它缺省从 `get_executing_context()` 取 node_id ＝**本导演台节点**，
+        与我方 `set_progress` 写的是同一 node_id 的同一条 registry entry。改听合并态 `"progress_state"`
+        也一样分不开（它按 node_id 键，两者同键）。
+      ⇒ 按 `node` 过滤只能滤掉**别的**节点，滤不掉同节点的 KSampler 步进；唯一可靠区分是自有事件名。
+
+    best-effort：拿不到 PromptServer（无服务器上下文/单测）或 send_sync 报错都**吞掉**——
+    进度上报失败绝不能把已跑了数小时的生成轮次拖成报错。try 体只含宿主 API 调用、无我方
+    逻辑，故宽 except 不会把我方 bug 洗成静默（同 段缓存.读缓存 第 2 层的口径）。"""
+    try:
+        from server import PromptServer
+        srv = PromptServer.instance
+        srv.send_sync(_进度事件名, {"node": node_id, "value": 当前, "max": 总数}, srv.client_id)
+    except Exception:  # noqa: BLE001 - try 体仅第三方调用（见 docstring），进度失败不得影响生成
+        pass
+
 
 class H3导演台(io.ComfyNode):
     @classmethod
@@ -31,10 +59,16 @@ class H3导演台(io.ComfyNode):
             category="H3导演台",
             description="多段时间轴 + 底部状态栏驱动官方 MiniMax H3 生成音视频",
             inputs=[
-                io.Model.Input("模型"),
+                # 双模型输入（选填）：节点按段任务类型自动匹配——fl2va模型 服务图生视频管线
+                #   (t2v/i2v/fl2v)，ref2va模型 服务参考生视频管线 (r2v/v2v/rv2v)。二者 optional：
+                #   执行核心只校验「本时间轴实际用到的任务」对应模型已连接（只跑 t2v 可不连 ref2va模型）。
+                io.Model.Input("fl2va模型", optional=True,
+                               tooltip="图生视频管线(t2v/i2v/fl2v)所用模型；时间轴含这些任务时须连接"),
+                io.Model.Input("ref2va模型", optional=True,
+                               tooltip="参考生视频管线(r2v/v2v/rv2v)所用模型；时间轴含这些任务时须连接"),
+                io.Clip.Input("CLIP编码器", tooltip="需连接 type=minimax 的 CLIP（Qwen3-VL）"),
                 io.Vae.Input("视频VAE"),
                 io.Vae.Input("音频VAE"),
-                io.Clip.Input("CLIP编码器", tooltip="需连接 type=minimax 的 CLIP（Qwen3-VL）"),
                 io.Combo.Input("任务类型", options=任务选项, default=任务选项[0]),
                 io.String.Input("全局提示词", multiline=True, default="",
                                 tooltip="逐段 prompt 的全局前缀（由状态栏 画风+预设正文 拼接而成）",
@@ -51,21 +85,24 @@ class H3导演台(io.ComfyNode):
                                max=_百万像素上限, step=0.1,
                                tooltip="总像素预算，1.0≈1024x1024；与输出分辨率共同决定画布",
                                extra_dict={"hidden": True}),   # 节点上不显示，经状态栏 @ 行编辑
-                io.Int.Input("步数", default=25, min=_步数下限, max=_步数上限, step=1,
+                io.Int.Input("步数", default=20, min=_步数下限, max=_步数上限, step=1,
                              tooltip="KSampler 去噪步数"),   # step 必填且=1（与 KSampler steps 同源）：io.Int 缺省 step=None 会被 prune_dict 剔除，前端数值 widget 拖拽/滚轮增量失效 → 步数无法调整
                 io.Combo.Input("采样器", options=采样器选项, default="res_multistep",
                                tooltip="KSampler 采样算法"),
                 io.Combo.Input("调度器", options=调度器选项, default="simple",
                                tooltip="KSampler 噪声调度"),
-                io.String.Input("模型标识", default="",
-                                tooltip="选填：本次所用 checkpoint 名，仅用于段缓存失效判定。换模型时改动它可让旧缓存作废重算；留空则退化为自动探测（ModelPatcher 通常不带 ckpt 名，多半探测不到，换模型可能命中旧缓存返回上个模型的旧画面）"),
                 # 参考共用 置于 inputs 末尾（向后兼容铁律）：ComfyUI 载入旧存档时 base litegraph
                 # 按位置回填 widgets_values，新 widget 插中间会令其后所有 widget 错位一位；追加到
-                # 末尾则旧存档前 12 个 widget 正确对齐、参考共用 拿默认 False。且与 execute 签名
+                # 末尾则旧存档前 11 个 widget 正确对齐、参考共用 拿默认 False。且与 execute 签名
                 # （参考共用 已是最后一个参数）顺序一致。
                 io.Boolean.Input("参考共用", default=False,
                                  tooltip="参考生视频(r2v/v2v/rv2v)下开启：所有段统一使用「参考素材」全局池（覆盖段级 refs），只需编辑每段提示词；关闭时段级 refs 优先、全局兜底",
                                  extra_dict={"hidden": True}),   # 节点上不显示，经状态栏参考区右侧开关编辑
+                # 尾帧锚定 同样置于 inputs 末尾（向后兼容铁律，见上 参考共用 注释）：旧存档 widgets_values
+                #   不含本 widget → 载入时拿默认 False（尾帧锚定关闭）。与 execute 签名末位参数一致。
+                io.Boolean.Input("尾帧锚定", default=False,
+                                 tooltip="开启：把上一段的尾帧/尾音频锚入下一段，实现段间镜头/声音平滑过渡（等效官方 MiniMaxH3AddGuide，但直接传 latent、不经解码再编码，故更快也更保真）；关闭：各段独立生成、不做段间连续。默认关闭",
+                                 extra_dict={"hidden": True}),   # 节点上不显示，经时间轴工具条「尾帧锚定」开关编辑
             ],
             outputs=[
                 io.Image.Output("图像"),
@@ -78,9 +115,10 @@ class H3导演台(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, 模型, 视频VAE, 音频VAE, CLIP编码器, 任务类型, 全局提示词,
-                时间轴数据, 参考素材, 运行选择, 帧率, 输出分辨率, 百万像素,
-                步数, 采样器, 调度器, 模型标识="", 参考共用=False):
+    def execute(cls, *, fl2va模型=None, ref2va模型=None, CLIP编码器, 视频VAE, 音频VAE,
+                任务类型, 全局提示词, 时间轴数据, 参考素材, 运行选择, 帧率,
+                输出分辨率, 百万像素, 步数, 采样器, 调度器,
+                参考共用=False, 尾帧锚定=False):
         try:                                        # ComfyUI 运行时（以包形式加载）
             from ..执行.执行核心 import 执行时间轴
             from ..后端路由.媒体路由 import 媒体根
@@ -103,18 +141,25 @@ class H3导演台(io.ComfyNode):
             "参考素材": 参考素材, "运行选择": 运行选择,
             "参考共用": bool(参考共用),
         }
-        # 键名对齐执行核心：vae＝视频 VAE，audio_vae＝音频 VAE（dict 键为内部 ASCII，与 socket 中文名解耦）
-        模型输入 = {"model": 模型, "clip": CLIP编码器,
-                    "vae": 视频VAE, "audio_vae": 音频VAE}
-        # 模型标识（ckpt 名）入段缓存指纹（⚠️#1 换 ckpt 失效类）：io.Model 传入的是内存
-        #   ModelPatcher，通常不带 model_path/ckpt_name，执行核心._模型标识 自动探测多半落空
-        #   → 换 ckpt 时指纹不变、命中旧缓存返回上个模型的旧画面。故由本 widget 显式提供。
-        #   留空("")时 _模型标识 的 `if v:` 会跳过它、退化为原探测兜底，行为与未加此键一致。
-        模型输入["模型标识"] = 模型标识
+        # 尾帧锚定开关 → 上下文帧数（段间锚定的门控）：执行核心以「上下文帧数>0」判定
+        #   是否把上一段尾帧/尾音频 latent 锚入下一段（取尾帧_latent / _采样段 两处均以此为闸）。开启时
+        #   **不传该键**，沿用执行核心的 默认上下文帧数(22)，与既有段间锚定语义一致；关闭时
+        #   显式置 0 → 完全跳过锚定，各段独立生成。上下文帧数 已入段缓存指纹（执行核心 采样参数
+        #   与 指纹源），开关切换会自动作废受影响的旧缓存，无需在此额外处理。
+        if not 尾帧锚定:
+            全局参数["上下文帧数"] = 0
+        # 键名对齐执行核心：fl2va_model/ref2va_model＝两管线模型，vae＝视频 VAE，audio_vae＝音频 VAE
+        #   （dict 键为内部 ASCII，与 socket 中文名解耦）。执行核心按段任务经 选模型槽 取 f"{槽}_model"，
+        #   并在生成前按需校验「本时间轴用到的任务」对应模型已连接（缺则报明确错误）。
+        模型输入 = {"fl2va_model": fl2va模型, "ref2va_model": ref2va模型,
+                    "clip": CLIP编码器, "vae": 视频VAE, "audio_vae": 音频VAE}
 
         def 进度(当前, 总数):
             # V3 set_progress(value, max_value, node_id)；显式带 node_id，避免依赖执行上下文传播。
+            # 它只更新宿主 progress registry（供宿主自己的进度条/合并态用），**不发** legacy "progress"
+            # 事件 ⇒ 自家状态栏面板看不到；面板靠下一行的自有通道（缘由详 _广播进度 docstring）。
             api.execution.set_progress(当前, 总数, node_id=node_id)
+            _广播进度(node_id, 当前, 总数)
 
         images, audio, report = 执行时间轴(
             时间轴数据, 全局参数, 模型输入, node_id, 媒体根(), 进度回调=进度)

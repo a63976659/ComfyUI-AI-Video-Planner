@@ -17,7 +17,7 @@ except ImportError:                                     # pytest（插件根在 
 
 # 采样器/调度器选项：与 KSampler 同源（comfy.samplers.KSampler.SAMPLERS/SCHEDULERS）。
 # pytest 无 ComfyUI 环境时回退到执行核心默认组合，保证 schema 冒烟可跑；默认值
-# res_multistep/simple 与 执行核心._生成段 的历史硬编码一致（行为不变）。
+# res_multistep/simple 与 执行核心._采样段 的历史硬编码一致（行为不变）。
 try:                                                    # ComfyUI 运行时
     from comfy.samplers import KSampler as _KSampler
     采样器选项 = list(_KSampler.SAMPLERS)
@@ -40,7 +40,7 @@ if "simple" not in 调度器选项:
     "4:3 (标准)", "9:16 (竖宽屏)", "16:9 (宽屏)", "21:9 (超宽屏)",
 ]
 默认分辨率 = "16:9 (宽屏)"
-默认百万像素 = 1.0
+默认百万像素 = 0.4
 
 任务标签 = {
     "t2v": "文生视频 t2v",
@@ -53,8 +53,10 @@ if "simple" not in 调度器选项:
 任务选项 = list(任务标签.values())
 标签到任务 = {v: k for k, v in 任务标签.items()}
 
-# 画布最大边：与 导演台.py 中 宽/高 widget 的 max 保持同源；官方 adapt_canvas 内部还会做
-# 面积≤768×1344 二次收缩，此处仅拦截"明显过大"（远大于任何 H3 输出规格）的非法值。
+# 画布最大边：仅拦截"明显过大"（远大于任何 H3 输出规格）的非法值。注：导演台 已无
+# 宽/高 widget（改由 分辨率到宽高 推导），故本阈值不再与 widget max 同源；面积上限
+# 实际由「百万像素」widget 的 max 兜（官方 adapt_canvas 的面积≤768×1344 收缩只作用于
+# 参考视频，不作用于主画布，详见 校验画布 docstring）。
 _画布最大边 = 8192
 
 
@@ -78,7 +80,9 @@ def 解析分辨率比例(标签):
 def 分辨率到宽高(标签, 百万像素, 倍数=None):
     """宽高比 + 百万像素预算 → (宽, 高)。逐行等同 comfy_extras/nodes_resolution.py
     ResolutionSelector.execute；multiple 取 CANVAS_MULTIPLE 以对齐 H3 画布 32 倍数。
-    默认 1.0MP+16:9 经 执行核心.对齐画布 后恰为历史默认 1344x768（行为不变）。"""
+    本函数的产出**就是最终主画布**（执行核心._采样段 原样透传给官方条件节点的
+    width/height）——与官方一致：adapt_canvas 只规范参考视频，主画布不过它。
+    故「百万像素」真实生效：9:16+0.4MP → 480x864、16:9+1.0MP → 1376x768。"""
     倍数 = 倍数 or CANVAS_MULTIPLE
     a, b = 解析分辨率比例(标签)
     总像素 = float(百万像素 or 默认百万像素) * 1024 * 1024
@@ -89,9 +93,12 @@ def 分辨率到宽高(标签, 百万像素, 倍数=None):
 
 
 def 校验画布(宽, 高):
-    """官方 adapt_canvas 会自动把画布规范到短边 768 / 面积≤768×1344 / 32 倍数；
-    此处只拦截明显非法值（<CANVAS_MULTIPLE 或 >_画布最大边）。阈值取自 采样与解码
-    （Task 4 §接口约束：禁散落魔法 32/8192）。"""
+    """只拦截明显非法值（<CANVAS_MULTIPLE 或 >_画布最大边）。阈值取自 采样与解码
+    （Task 4 §接口约束：禁散落魔法 32/8192）。
+    ⚠️ 主画布**不会**被官方 adapt_canvas 自动规范（它只作用于参考视频），故本校验是主画布
+    唯一的合法性关卡；但目前尚未接入生产路径（导演台.execute 未调），实际兜底是
+    分辨率到宽高 的 multiple=32 + max(倍数, …) 下限，产出必为 ≥32 的 32 倍数。
+    如后续开放自定义宽高输入，必须先把本函数接进 execute。"""
     宽 = int(宽)
     高 = int(高)
     if 宽 < CANVAS_MULTIPLE or 高 < CANVAS_MULTIPLE:

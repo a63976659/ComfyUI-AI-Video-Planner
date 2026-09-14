@@ -49,6 +49,20 @@ function 注入样式() {
         background:linear-gradient(180deg,#3b2426,#2c1c1e)}
       .h3dyt-tl-概要{margin-left:auto;color:var(--tl-mut);white-space:nowrap;font-variant-numeric:tabular-nums}
 
+      /* 工具条「渐变过渡」开关：外框沿用 .h3dyt-tl-钮 的胶囊底让它在一排按钮里协调，滑块复用
+         .h3dyt-tl-滑（其基础样式全局可用），仅 :checked 态另立 .h3dyt-tl-锚 作用域——不触碰
+         段卡内 .h3dyt-tl-跑 的既有规则，避免相互串味。 */
+      .h3dyt-tl-锚{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;position:relative;
+        padding:4px 9px;border-radius:6px;border:1px solid var(--tl-line2);cursor:pointer;
+        user-select:none;white-space:nowrap;color:var(--tl-mut);font:inherit;font-size:10px;
+        background:linear-gradient(180deg,#2c2f35,#23262b);transition:background .12s,border-color .12s}
+      .h3dyt-tl-锚:hover{background:linear-gradient(180deg,#363a42,#292d33);border-color:#5d646f}
+      .h3dyt-tl-锚 input{position:absolute;opacity:0;width:0;height:0;margin:0}
+      .h3dyt-tl-锚 input:checked+.h3dyt-tl-滑{background:rgba(79,255,143,.26)}
+      .h3dyt-tl-锚 input:checked+.h3dyt-tl-滑::after{transform:translateX(10px);background:var(--tl-acc)}
+      .h3dyt-tl-锚 input:checked~.h3dyt-tl-锚字{color:var(--tl-acc)}
+      .h3dyt-tl-锚 input:focus-visible+.h3dyt-tl-滑{box-shadow:0 0 0 2px rgba(79,255,143,.34)}
+
       /* ── 轨道区（标尺 + 轨道同参逐列对齐；宽度自适应铺满，无横向滚动） ── */
       /* 卷本身是 flex 列：空态的 flex:1 才撑得满（否则 0 段时下面留一块死黑） */
       .h3dyt-tl-卷{flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;display:flex;flex-direction:column}
@@ -257,13 +271,32 @@ export function 挂载时间轴(node, 面板) {
         return b;
     }
 
+    // 工具条「渐变过渡」开关：真源是节点隐藏 widget「尾帧锚定」（布尔），此处仅读写它。
+    // 开启→执行核心沿用默认上下文帧数(22)、以上一段尾帧/尾音频锚入下一段（段间连续）；
+    // 关闭→上下文帧数=0、各段独立生成。每次 渲染() 现读 widget 值，故与节点状态恒同步。
+    function 建锚定开关() {
+        const 标 = document.createElement("label");
+        标.className = "h3dyt-tl-锚";
+        标.title = "渐变过渡：开启则把上一段尾帧/尾音频锚入下一段（官方 AddGuide），实现段间平滑过渡；关闭则各段独立生成（写入节点隐藏 widget「尾帧锚定」）";
+        标.onclick = (e) => e.stopPropagation();
+        const cb = document.createElement("input");
+        cb.type = "checkbox"; cb.checked = 真源.读尾帧锚定(node);
+        cb.onchange = () => 真源.写尾帧锚定(node, cb.checked);
+        const 滑 = document.createElement("span");
+        滑.className = "h3dyt-tl-滑";
+        const 字 = document.createElement("span");
+        字.className = "h3dyt-tl-锚字"; 字.textContent = "渐变过渡";
+        标.append(cb, 滑, 字);
+        return 标;
+    }
+
     function 建卡(s, i) {
         const 卡 = document.createElement("div");
         卡.className = "h3dyt-tl-卡";
         const 色 = 段色[i % 段色.length];
         卡.style.setProperty("--seg", 色);
         卡.style.setProperty("--segsoft", 色 + "24");   // 8 位 hex：14% 不透明度
-        卡.title = `段${i} · ${(s.task || "t2v")} · ${一位(s.start || 0)}–${一位(s.end || 0)}s`;
+        卡.title = `段${i + 1} · ${(s.task || "t2v")} · ${一位(s.start || 0)}–${一位(s.end || 0)}s`;
         卡.onclick = () => { 设选中(i); 刷态(); };
 
         const 顶 = document.createElement("div");
@@ -274,7 +307,7 @@ export function 挂载时间轴(node, 面板) {
         const 头 = document.createElement("div");
         头.className = "h3dyt-tl-头";
         const 序 = document.createElement("span");
-        序.className = "h3dyt-tl-序号"; 序.textContent = String(i);
+        序.className = "h3dyt-tl-序号"; 序.textContent = String(i + 1);
         const 任 = document.createElement("span");
         任.className = "h3dyt-tl-任务"; 任.textContent = s.task || "t2v";
         const 区 = document.createElement("span");
@@ -351,7 +384,7 @@ export function 挂载时间轴(node, 面板) {
         const 卡 = 卡片组[i];
         if (卡) {
             刷区间(卡, s);
-            卡.title = `段${i} · ${(s.task || "t2v")} · ${一位(s.start || 0)}–${一位(s.end || 0)}s`;
+            卡.title = `段${i + 1} · ${(s.task || "t2v")} · ${一位(s.start || 0)}–${一位(s.end || 0)}s`;
         }
     }
 
@@ -439,11 +472,12 @@ export function 挂载时间轴(node, 面板) {
         });
         const 全选 = 建钮("全选运行", "", "所有段都参与生成", () => { const 段组 = 读段(); 段组.forEach((s) => (s.run = true)); 写段(段组); });
         const 全不选 = 建钮("全不选", "", "所有段都不参与生成", () => { const 段组 = 读段(); 段组.forEach((s) => (s.run = false)); 写段(段组); });
+        const 锚定 = 建锚定开关();   // 全局开关，不随「有无段」禁用：无段时也可先设好再建段
         删除.disabled = 裁剪.disabled = !有段;
         全选.disabled = 全不选.disabled = !有段;
         概要 = document.createElement("span");
         概要.className = "h3dyt-tl-概要";
-        工具.append(新增, 删除, 裁剪, 全选, 全不选, 概要);
+        工具.append(新增, 删除, 裁剪, 全选, 全不选, 锚定, 概要);
         根.appendChild(工具);
 
         const 卷 = document.createElement("div");

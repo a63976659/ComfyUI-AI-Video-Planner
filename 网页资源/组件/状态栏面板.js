@@ -22,22 +22,29 @@ function 注入样式() {
       .h3dyt-类型选择{display:flex;flex-direction:column;gap:6px;align-items:stretch}
       .h3dyt-胶囊{padding:3px 10px;border:1px solid #444;border-radius:12px;background:#2f2f2f;color:#ccc;cursor:pointer}
       .h3dyt-胶囊.激活{background:#4a9eff;color:#fff;border-color:#4a9eff}
-      .h3dyt-提示词{flex:0.7 1 157px;min-width:126px;display:flex;flex-direction:column}
+      .h3dyt-提示词{flex:1 1 200px;min-width:170px;display:flex;flex-direction:column}
       .h3dyt-编辑区{flex:1;min-height:52px;overflow-y:auto;padding:6px 8px;background:#1c1c1c;border:1px solid #3a3a3a;border-radius:6px;white-space:pre-wrap}
       .h3dyt-工具行{display:flex;flex-wrap:wrap;gap:6px;flex:0 0 auto;margin-bottom:4px}
       .h3dyt-说明行{flex:0 0 auto;margin-top:4px;color:#8c8c8c;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .h3dyt-chip{display:inline-block;margin:0 2px;padding:0 6px;background:#3a5f8a;border-radius:8px;color:#cfe6ff}
-      .h3dyt-缩略{position:relative;display:inline-flex;width:44px;height:44px;margin:0;border:1px solid #3a3a3a;border-radius:6px;overflow:hidden;background:#1a1a1a;vertical-align:middle}
+      .h3dyt-缩略{position:relative;display:inline-flex;width:66px;height:66px;margin:0;border:1px solid #3a3a3a;border-radius:6px;overflow:hidden;background:#1a1a1a;vertical-align:middle}
       .h3dyt-缩略媒{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
-      .h3dyt-音标{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:22px;color:#9ec1e8;background:#1f2a33}
+      .h3dyt-音标{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:33px;color:#9ec1e8;background:#1f2a33}
       .h3dyt-缩略 b{position:absolute;right:1px;top:1px;padding:0 3px;font-size:10px;line-height:14px;color:#fff;background:rgba(0,0,0,.6);border-radius:4px;cursor:pointer}
-      .h3dyt-参考{flex:0.15 0 auto;display:flex;gap:12px;align-items:flex-start;overflow-y:auto}
+      /* 参考区/右列均内容宽、组间 10px 紧凑排布；多余宽度全归中间提示词区（flex:1 独占） */
+      .h3dyt-参考{flex:0 0 auto;display:flex;gap:10px;align-items:flex-start;overflow:auto}
       .h3dyt-参考组{display:flex;flex-direction:column;gap:4px}
       .h3dyt-参考头{display:flex;align-items:center;gap:4px;opacity:.9}
-      .h3dyt-九宫{display:grid;grid-template-columns:repeat(3,44px);gap:4px}
+      .h3dyt-九宫{display:grid;grid-template-columns:repeat(3,66px);gap:4px}
       .h3dyt-竖列{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
-      .h3dyt-右列{display:flex;flex-direction:row;gap:12px;align-items:flex-start;flex:0.15 0 auto;overflow-y:auto}
-      .h3dyt-首尾帧{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
+      .h3dyt-右列{display:flex;flex-direction:row;gap:10px;align-items:flex-start;flex:0 0 auto;overflow:auto}
+      /* 首尾帧水平双列：文字标在上、下拉在下、选图后预览缩略图垫底 */
+      .h3dyt-首尾帧{display:flex;flex-direction:row;gap:10px;flex:0 0 auto;align-items:flex-start}
+      .h3dyt-帧框{display:flex;flex-direction:column;gap:4px;flex:0 0 auto}
+      .h3dyt-帧标{color:#ccc}
+      .h3dyt-帧选{width:170px;background:#1c1c1c;color:#ddd;border:1px solid #444;border-radius:3px;padding:2px 4px;font:12px system-ui}
+      .h3dyt-帧预览{width:66px;height:66px;object-fit:cover;display:block;border:1px solid #3a3a3a;border-radius:6px;background:#1a1a1a}
+      .h3dyt-帧预览[hidden]{display:none}
       .h3dyt-弹层{position:fixed;z-index:9999;max-height:200px;overflow:auto;background:#262626;border:1px solid #444;border-radius:6px}
       .h3dyt-弹层 div{padding:4px 10px;cursor:pointer}
       .h3dyt-弹层 div:hover{background:#3a5f8a}
@@ -71,7 +78,8 @@ export function 创建状态栏面板(底栏) {
     let 当前节点 = null;
     let 时间轴刷卡 = null;   // 时间轴挂载时注册；状态栏编辑段内容后回调它，局部刷新对应段卡
 
-    // 布局：左=参考文件区，中=提示词编辑区（撑满状态栏高度），右列=任务类型竖排+首尾帧。
+    // 布局：左=参考文件区（四组按宽度分配铺满），中=提示词编辑区（撑满状态栏高度），
+    // 右列=任务类型竖排+首尾帧（水平双列、选图后带预览）。
     const 参考区 = 创建参考文件区(主体, {
         变更: (素材) => { if (当前节点) 真源.写参考素材(当前节点, 素材); 提示词.刷新弹层?.(); 刷新首尾帧选项(); },
         // 「全段共用」开关 → 节点隐藏 widget「参考共用」（布尔）；执行核心 _应用全局 据此覆盖段级 refs
@@ -102,14 +110,35 @@ export function 创建状态栏面板(底栏) {
     首尾帧区.append(首帧框.盒, 尾帧框.盒);
 
     function 建帧下拉(名, 变更) {
-        const 盒 = document.createElement("label");
-        盒.style.cssText = "display:flex;align-items:center;gap:4px";
-        盒.textContent = 名;
+        // 竖向三段：文字标在上、下拉在其下、选图后预览缩略图垫底（与参考缩略图同 66px）。
+        const 盒 = document.createElement("div");
+        盒.className = "h3dyt-帧框";
+        const 标 = document.createElement("span");
+        标.className = "h3dyt-帧标";
+        标.textContent = 名;
         const sel = document.createElement("select");
-        sel.style.cssText = "background:#1c1c1c;color:#ddd;border:1px solid #444;border-radius:3px;max-width:300px";
-        sel.onchange = () => 变更(sel.value || null);
-        盒.appendChild(sel);
-        return { 盒, sel };
+        sel.className = "h3dyt-帧选";
+        const 预览 = document.createElement("img");
+        预览.className = "h3dyt-帧预览";
+        预览.hidden = true;
+        盒.append(标, sel, 预览);
+        const 框 = { 盒, sel, 预览 };
+        sel.onchange = () => { 变更(sel.value || null); 刷新帧预览(框); };
+        return 框;
+    }
+
+    // 预览图跟随下拉当前值：空值隐藏并清 src，避免残留旧图请求。
+    function 刷新帧预览(框) {
+        const 名 = 框.sel.value;
+        if (名) {
+            框.预览.src = "/h3dyt/media/file?name=" + encodeURIComponent(名);
+            框.预览.title = 名;
+            框.预览.hidden = false;
+        } else {
+            框.预览.hidden = true;
+            框.预览.removeAttribute("src");
+            框.预览.title = "";
+        }
     }
 
     function 刷新首尾帧选项() {
@@ -126,6 +155,7 @@ export function 创建状态栏面板(底栏) {
                 框.sel.appendChild(o);
             });
             框.sel.value = 图片.includes(旧) ? 旧 : "";
+            刷新帧预览(框);
         }
     }
 
@@ -192,6 +222,7 @@ export function 创建状态栏面板(底栏) {
         刷新首尾帧选项();
         首帧框.sel.value = seg.refs?.首帧 || "";
         尾帧框.sel.value = seg.refs?.尾帧 || "";
+        刷新帧预览(首帧框); 刷新帧预览(尾帧框);
         刷新显隐();
     }
 
