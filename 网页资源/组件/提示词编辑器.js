@@ -1,6 +1,7 @@
 // contenteditable 提示词；@ 弹参考列表 → 插入 <Picture N>/<Audio J>/<Video K> chip；
 // 读回时把 chip 还原为标签文本（与后端 执行/参考素材.py 提取标签 对齐）。
 import { 创建画风预设选择 } from "./画风预设选择.js";
+import { 创建计划数据 } from "./计划数据.js";
 import { app } from "../../../scripts/app.js";
 
 const 标签re = /<(Picture|Audio|Video)\s*(\d+)>/gi;
@@ -9,6 +10,26 @@ const 槽到标签 = { 图片: "Picture", 音频: "Audio", 视频: "Video" };
 const 标签到中文 = { Picture: "图像", Audio: "音频", Video: "视频" };
 // 标签英文名（小写）→ 素材池中文键，与后端 执行/参考素材.py `_标签到槽` 同源；审查悬空标签 据此查对应素材数。
 const 标签到槽 = { picture: "图片", audio: "音频", video: "视频" };
+
+// 装饰标签：LLM 生成的分镜/规划提示词里常见的段落小标题（如 `subject_definitions:`、`[Shot 1]`），
+// 只是**视觉分组标记**，不引用任何素材、后端也不解析——前端在 设值() 时把它们渲染成
+// 与 <Picture N> 同形态但配色的 chip，仅便于阅读；dataset.tag 仍存原始英文，取纯文本() 原样吐出，
+// 后端与 计划数据 保存/加载 全链路无感。`[Shot N]` 里的 N 是任意正整数（不同分镜数量都要能对上）。
+// 🔒 单一真源：8 个模式只在 `装饰模式` 字符串里硬编码一次，单装饰re / 全标签re 均由它派生——
+//   未来增删装饰标签只需改 `装饰模式` + `装饰到中文` 两处，避免两个正则漂移导致 chip 化静默失效。
+const 装饰模式 = String.raw`subject_definitions:|summary:|retention_analysis:|detailed_description:|overall_soundscape:|non_diegetic_music:|\[reference generation\]|\[Shot\s*\d+\]`;
+const 单装饰re = new RegExp(`^(?:${装饰模式})$`, "i");
+const 装饰到中文 = {
+    "subject_definitions:": "主体定义:",
+    "summary:": "摘要:",
+    "retention_analysis:": "留存分析:",
+    "detailed_description:": "详细描述:",
+    "overall_soundscape:": "整体音景:",
+    "non_diegetic_music:": "非叙事音乐:",
+    "[reference generation]": "[参考生成]",
+};
+// 引用 chip + 装饰 chip 合并匹配：设值() 一次扫描按位置交替插入文本节点/两类 chip，避免二次遍历互相踩。
+const 全标签re = new RegExp(`<(?:Picture|Audio|Video)\\s*\\d+>|(?:${装饰模式})`, "gi");
 
 function toast(文本) { app?.ui?.toast?.showMessage?.(文本); }
 
@@ -33,13 +54,19 @@ export const 默认分辨率 = "16:9 (宽屏)";
 // 否则「无选中节点时的兜底显示值」会与「新拖出节点的 widget 值」不一致。
 // 🔒 回归锁：测试/测试_常量同步.py（id `default-megapixels`）——漂移会直接红，不再靠人工核对。
 export const 默认百万像素 = 0.4;
-// 标签 → 中文显示名（<Picture 1> → 图像1）；dataset.tag 仍存原始标签，与后端提取标签对齐
+// 标签 → 中文显示名（<Picture 1> → 图像1；subject_definitions: → 主体定义:；[Shot 3] → [镜头 3]）；
+// dataset.tag 仍存原始标签，与后端提取标签对齐
 function 显示名(标签) {
-    const m = 单标签re.exec(标签 || "");
+    if (!标签) return "";
+    const 小 = 标签.toLowerCase();
+    if (装饰到中文[小]) return 装饰到中文[小];
+    const shotM = /^\[shot\s*(\d+)\]$/i.exec(标签);
+    if (shotM) return `[镜头 ${shotM[1]}]`;
+    const m = 单标签re.exec(标签);
     return m ? `${标签到中文[m[1]]}${m[2]}` : (标签 || "").replace(/[<>]/g, "");
 }
 
-export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分辨率变更, 百万像素变更, 全局提示词变更 }) {
+export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分辨率变更, 百万像素变更, 全局提示词变更, 取节点, 全刷 }) {
     const 盒 = document.createElement("div");
     盒.className = "lvp-提示词";
     const 编辑区 = document.createElement("div");
@@ -102,6 +129,10 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     // 在节点上已隐藏）。工具行因此有 6 组控件，窄屏靠 .lvp-工具行 的 flex-wrap 换行兜住。
     const 画风预设 = 创建画风预设选择(工具行, { 变更: 全局提示词变更 });
 
+    // 计划数据（保存/加载）：放在工具行最右（组件内部用 margin-left:auto 推右）。需要 取节点
+    // 读写全量 widget，需要 全刷 在加载后一次性同步状态栏 + 时间轴 UI。
+    const 计划 = 创建计划数据(工具行, { 取节点, 全刷 });
+
     // 编辑说明行：介绍 @ 用法等编辑方法
     const 说明行 = document.createElement("div");
     说明行.className = "lvp-说明行";
@@ -114,7 +145,9 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
 
     function 建chip(标签) {
         const span = document.createElement("span");
-        span.className = "lvp-chip";
+        // 装饰 chip 附加 `.lvp-chip-deco`（换配色以区别于可点击引用的 <Picture/Audio/Video N>）；
+        // 两类共用 `contenteditable=false` + `dataset.tag=原文`，取纯文本() 无差别还原。
+        span.className = 单装饰re.test(标签 || "") ? "lvp-chip lvp-chip-deco" : "lvp-chip";
         span.contentEditable = "false";
         span.dataset.tag = 标签;
         span.textContent = 显示名(标签);
@@ -145,7 +178,9 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
         编辑区.innerHTML = "";
         const s = 文本 || "";
         let 末 = 0;
-        for (const m of s.matchAll(标签re)) {
+        // 全标签re 同时匹配 <Picture/Audio/Video N> 引用与 subject_definitions:/[Shot N] 等装饰标签；
+        // 建chip() 内部据 单装饰re 分派类名，两条路径共用一套文本节点/ chip 交替插入逻辑。
+        for (const m of s.matchAll(全标签re)) {
             if (m.index > 末) 编辑区.appendChild(document.createTextNode(s.slice(末, m.index)));
             编辑区.appendChild(建chip(m[0]));
             末 = m.index + m[0].length;
@@ -160,8 +195,8 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
         const 素材 = 取参考List_安全();
         弹层 = document.createElement("div");
         弹层.className = "lvp-弹层";
-        弹层.style.left = (锚rect?.left ?? 100) + "px";
-        弹层.style.top = ((锚rect?.bottom ?? 100) + 4) + "px";
+        // 先隐藏，挂到 body 后由 定位弹层() 量出真实尺寸并据视口可用空间给出最终 left/top（防底部溢出）
+        弹层.style.visibility = "hidden";
         let 有条目 = false;
         for (const 槽 of ["图片", "音频", "视频"]) {
             (素材[槽] || []).forEach((名, i) => {
@@ -180,6 +215,41 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
             弹层.appendChild(空);
         }
         document.body.appendChild(弹层);
+        定位弹层(锚rect);
+        弹层.style.visibility = "";   // 定位完成后显形，避免在错误位置闪一下
+    }
+
+    // 视口感知定位（同 Floating UI 的 flip + size 思路）：弹层靠下时若下方放不下就翻到上方；
+    // 两侧都放不下则取更宽松一侧并把 max-height 收紧到可用高度，触发 .lvp-弹层 已有的
+    // overflow:auto 内部滚动，保证任何位置都能滚动点选，不再溢出屏幕。
+    function 定位弹层(锚rect) {
+        const 边距 = 8, 间隙 = 4;
+        const 视高 = window.innerHeight, 视宽 = window.innerWidth;
+        const 高 = 弹层.offsetHeight;   // 已受 CSS max-height:200px 约束后的实际高度
+        const 宽 = 弹层.offsetWidth;
+        const 锚左 = 锚rect?.left ?? 100;
+        const 锚上 = 锚rect?.top ?? 100;
+        const 锚下 = 锚rect?.bottom ?? (锚上 + 20);
+        const 下空间 = 视高 - 锚下 - 边距;   // 锚点下方可用高度
+        const 上空间 = 锚上 - 边距;          // 锚点上方可用高度
+
+        let top, 可用高;
+        // 优先下方；下方放不下而上方更宽裕 → 翻上方；否则留下方（并按需收紧高度）
+        if (高 + 间隙 <= 下空间 || (高 + 间隙 > 上空间 && 下空间 >= 上空间)) {
+            top = 锚下 + 间隙;
+            可用高 = 下空间 - 间隙;
+        } else {
+            可用高 = 上空间 - 间隙;
+            top = 锚上 - 间隙 - Math.min(高, 可用高);
+        }
+        // 高度超出可用空间才收紧（低于 CSS 的 200px 上限），使弹层完整落在视口内并可滚动
+        if (高 > 可用高) 弹层.style.maxHeight = Math.max(60, 可用高) + "px";
+
+        // 水平方向夹回视口，避免右侧越界
+        let left = 锚左;
+        if (left + 宽 > 视宽 - 边距) left = Math.max(边距, 视宽 - 边距 - 宽);
+        弹层.style.left = left + "px";
+        弹层.style.top = Math.max(边距, top) + "px";
     }
     function 取参考List_安全() {
         try { return 取参考列表?.() || { 图片: [], 音频: [], 视频: [] }; }
@@ -269,6 +339,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
         设值, 取值: 取纯文本, 设分辨率, 设百万像素,
         设全局提示词: (v) => 画风预设.设值(v),
         刷新画风预设: () => 画风预设.刷新选项(),
+        刷新计划列表: () => 计划.刷新列表(),
         刷新弹层: () => { if (弹层) 弹参考列表(弹层.getBoundingClientRect()); },
     };
 }

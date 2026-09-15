@@ -2,7 +2,16 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { 创建状态栏面板 } from "./组件/状态栏面板.js";
 
-const 扩展名 = "ComfyUI-AI-Edit-Video.长视频规划师";
+// 扩展名动态派生自插件文件夹名（ComfyUI 前端约定：/extensions/<文件夹名>/...），
+// 文件夹再改名不用动这里；URL 结构异常时兜底为固定串。
+const 扩展名 = (() => {
+    try {
+        const 段 = new URL(import.meta.url).pathname.split("/").filter(Boolean);
+        const i = 段.indexOf("extensions");
+        if (i >= 0 && 段[i + 1]) return `${decodeURIComponent(段[i + 1])}.长视频规划师`;
+    } catch {}
+    return "ComfyUI-AI-Video-Planner.长视频规划师";
+})();
 const 节点类 = "长视频规划师";
 let 面板 = null;
 

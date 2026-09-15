@@ -3,7 +3,7 @@
 
 单一真源约束（Task 4 §接口约束）：CANVAS_MULTIPLE 必须来自 执行.采样与解码，
 禁散落魔法 32/8192。ComfyUI 运行时 本模块路径为
-`custom_nodes.ComfyUI-AI-Edit-Video.节点.节点公用`，走相对导入；pytest 走
+`custom_nodes.<插件根>.节点.节点公用`（<插件根> 即本插件文件夹名），走相对导入；pytest 走
 `节点.节点公用`（插件根已在 sys.path），相对 `..` 越界 → 回退绝对导入。
 """
 from __future__ import annotations

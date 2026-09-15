@@ -16,6 +16,8 @@ All the actual generation work is done by ComfyUI's official MiniMax H3 nodes. T
   - [Step 2: Open the bottom status bar](#step-2-open-the-bottom-status-bar)
   - [Step 3: Edit the timeline](#step-3-edit-the-timeline)
   - [Step 4: Click Queue Prompt to start](#step-4-click-queue-prompt-to-start)
+- [Presets](#presets)
+- [Plan data (save and load full setups)](#plan-data-save-and-load-full-setups)
 - [What if I cancel or hit an error halfway](#what-if-i-cancel-or-hit-an-error-halfway)
 - [Hardware requirements](#hardware-requirements)
 - [Installation](#installation)
@@ -31,7 +33,7 @@ All the actual generation work is done by ComfyUI's official MiniMax H3 nodes. T
 - **Split a long video into segments**: add as many segments as you want on the timeline, each with its own prompt and duration.
 - **Pick a generation mode per segment**: text-to-video, image-to-video, first-and-last-frame, reference-to-video, video-to-video, reference-plus-video — six modes in total, and you can mix them across segments.
 - **Attach reference materials per segment**: images, videos or audio. Use tags like `<Picture 1>` inside the prompt to point at them.
-- **Smooth handoff between segments (optional)**: turn on the "Gradient Transition" toggle and the tail of the previous segment (both picture and sound) is carried into the next one, so seams don't jump. Turn it off and every segment is generated independently.
+- **Smooth handoff between segments (optional)**: turn on the "Gradient Transition" toggle and the tail of the previous segment (both picture and sound) is carried into the next one, plus a 4-frame crossfade at the seam, so seams don't jump. Turn it off and every segment is generated independently with a hard cut at the seam.
 - **Generated segments are saved automatically**: each finished segment is written to disk. Next time you run, unchanged segments are re-used instead of regenerated — a full re-run takes only tens of seconds.
 - **Only run the segments you check**: every segment has a "Run" toggle. Only checked ones get regenerated. Unchecked segments that were previously generated still get stitched into the final video.
 
@@ -62,9 +64,10 @@ Node outputs: image, audio, frame rate, total frame count, and a report string. 
 Once the plugin loads, a **Video Planner** panel appears at the **bottom of the ComfyUI page**, containing:
 
 - **Generation type** — switch between the 6 task modes
-- **Style preset** — pick a style from a dropdown; its body is automatically inserted into the global prompt
+- **Preset** — pick a saved prompt snippet from a dropdown; its body is written into the global prompt automatically (details in [Presets](#presets))
 - **Prompt editor** — write the global prompt, which gets prepended to every segment
 - **Reference files area** — upload images / videos / audio; duplicates are detected automatically
+- **Plan data** — save/load the entire node setup with one click (details in [Plan data](#plan-data-save-and-load-full-setups))
 - **Timeline** — the main working area
 
 The matching inputs on the node itself are auto-hidden. All the data still lives inside the node; the status bar is only an editor.
@@ -76,7 +79,7 @@ The matching inputs on the node itself are auto-hidden. All the data still lives
 - **Toggle Run**: the switch below each segment card. Only checked segments get regenerated; unchecked ones with a saved copy are reused
 - **Edit prompt / attach references**: click into the segment card
 - **Playhead**: drag it to see which segment covers a given moment
-- **Gradient Transition**: a toggle on the timeline toolbar. When on, segments blend smoothly into each other
+- **Gradient Transition**: a toggle on the timeline toolbar. When on, segments blend smoothly into each other (tail-context anchoring + a 4-frame crossfade at the seam); when off, seams are hard-cut
 
 Timeline data is stored as JSON inside the node's `Timeline Data` input. You can copy and paste it, which makes archiving and sharing easy.
 
@@ -90,6 +93,89 @@ Generation runs in two stages:
 Splitting it this way frees up the GPU during decoding. Without it, a 16 GB card running long segments at high resolution would be more than ten times slower.
 
 The status bar shows segment-level progress like "Generating 3/7".
+
+---
+
+## Presets
+
+Above the prompt editor, in the toolbar row, you'll find a **Preset** dropdown for quickly inserting commonly used prompt snippets. Whatever you pick is written back to the node's `Global Prompt` field (which is hidden on the node itself). At execution time the backend prepends the global prompt to **every segment's prompt**, so anything you put here applies to all segments.
+
+### Save your own prompt snippets as .txt files
+
+Drop a `.txt` file into `<plugin-root>/预设/` and it automatically shows up in the "Preset" dropdown.
+
+- **Scan scope**: `.txt` files directly under `预设/`, plus `.txt` files **one sub-folder level** deep (deeper levels are ignored).
+- **Display name**: root-level files show the filename (minus the `.txt` suffix); sub-folder files show `subfolder/filename`.
+- **Encoding support**: tries `utf-8-sig` → `gbk` → `utf-8 replace` fallback in order. Windows Notepad ANSI(GBK) files also read correctly.
+- **Triggering a rescan**: after adding or editing a `.txt`, click the status bar title to collapse and re-expand — the rescan fires automatically on expand.
+
+### Three examples shipped with the project
+
+| Path | Shown in the dropdown | Purpose |
+|---|---|---|
+| `预设/nanobanana分镜.txt` | `nanobanana分镜` | Storyboard prompt template |
+| `预设/视频提示词预设/动态图.txt` | `视频提示词预设/动态图` | Prompts that "bring a still image to life" |
+| `预设/视频提示词预设/电影风格.txt` | `视频提示词预设/电影风格` | Cinematic-look prompt |
+
+### Refill behavior
+
+When a node is loaded from a workflow file, the frontend reverse-parses the global prompt: if the entire text matches a preset, that preset gets selected; anything that doesn't match is kept as a "residual" chunk verbatim, so nothing gets silently lost.
+
+---
+
+## Plan data (save and load full setups)
+
+At the **far right** of the same toolbar row above the prompt editor, you'll find the "Plan data" dropdown (Load) + "Save" button. Use it to snapshot the current node's entire setup into a JSON file and reload it later with one click.
+
+### What gets saved
+
+A plan contains:
+
+- All regular widgets: task type, output resolution, megapixels, frame rate, steps, sampler, scheduler.
+- All hidden widgets: global prompt (the preset body written into it), reference sharing, tail-frame anchoring, run selection.
+- The full timeline JSON (each segment's task/prompt/start/end/run/refs).
+- The reference material list (image/audio/video filenames).
+
+Storage location: `<plugin-root>/计划数据/<name>.json`. The backend creates the folder on demand; you don't need to make it yourself.
+
+### How to save
+
+1. Click the "Save" button.
+2. Type a plan name (no `.json` extension).
+3. If the name already exists, you'll be asked to confirm overwrite. The original `创建时间` (creation time) field is preserved on overwrite.
+
+### How to load
+
+1. Pick an entry from the "(Load)" dropdown.
+2. If the current node already has timeline data (segment count > 0), you'll be asked to confirm overwrite.
+3. After loading, every UI element auto-syncs (timeline rebuilt, prompt refilled, reference material list refreshed).
+4. The dropdown resets to the "(Load)" placeholder after loading, so picking the same entry again still triggers a fresh load.
+
+### Naming rules
+
+Plan names are validated **on both sides** (frontend pre-validates for instant feedback; backend re-validates as the final gate):
+
+- Cannot be empty or whitespace-only.
+- Cannot contain `\ / : * ? " < > |` or control characters (including newlines and tabs).
+- Cannot start or end with a dot or space (Windows silently strips them).
+- Cannot be `.` / `..` / a Windows reserved name (CON/PRN/AUX/NUL/COM1-9/LPT1-9).
+- Length ≤ 100 characters.
+
+### Missing reference materials
+
+On load, the backend cross-checks against the media pool (`ComfyUI/input/`):
+
+- Any image/video/audio file referenced by the plan that has since been deleted is dropped from the list.
+- Any stale reference in each segment's `refs.首帧/尾帧` is also cleaned out.
+- The frontend toasts "Skipped N missing reference materials: xxx, yyy"; loading is **not** aborted.
+
+This way, even if a plan points at materials that no longer exist, you don't have to wait until Queue Prompt to find out.
+
+### Typical uses
+
+- Save a common setup (e.g. "9:16 vertical + 20 steps + cinematic style + a specific storyboard template") as a plan and reuse it with one click.
+- Share a complete generation recipe with teammates (paired with the `.txt` templates under `预设/`).
+- Archive important timelines — more complete than copying the node JSON directly, because a plan also captures every hidden widget.
 
 ---
 
@@ -128,12 +214,14 @@ This run will hit the cache for every segment. Tens of seconds later you get you
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone <this-repo-url> ComfyUI-AI-Edit-Video
+git clone <this-repo-url>
 ```
+
+> Folder name is not fixed: ComfyUI scans every subdirectory under `custom_nodes/`. The default (repo name) is recommended; you can also rename it to whatever you like.
 
 **Option B: manual drop-in**
 
-Download the zip, unzip it, and put the whole folder at `ComfyUI/custom_nodes/ComfyUI-AI-Edit-Video/`. Restart ComfyUI.
+Download the zip, unzip it, and put the whole folder at `ComfyUI/custom_nodes/ComfyUI-AI-Video-Planner/` (folder name is up to you). Restart ComfyUI.
 
 **Optional dependencies** (uncomment them in `requirements.txt`, then run `pip install -r requirements.txt`):
 
@@ -169,10 +257,10 @@ The `Frame Rate` input on the node is just a tag written into the output video f
 
 **How segments join together**
 
-Controlled by the "Gradient Transition" toggle:
+Controlled by the "Gradient Transition" toggle (off by default):
 
-- **Off** (default): each segment is generated independently. The seam is only a 4-frame crossfade.
-- **On**: the last 22 frames of picture and sound from the previous segment are carried into the next one. Seams look more natural, but things can also go wrong more easily.
+- **Off** (default): each segment is generated independently. Seams are hard-cut with no transition processing.
+- **On**: the last 22 frames of picture and sound from the previous segment are carried into the next one, plus a 4-frame crossfade at the seam. Handoffs look more natural, but things can also go wrong more easily.
 
 If you see smearing, ghosting, or artifacts, first turn Gradient Transition off to check whether it's the model itself.
 

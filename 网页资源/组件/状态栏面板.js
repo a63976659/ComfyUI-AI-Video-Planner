@@ -27,6 +27,9 @@ function 注入样式() {
       .lvp-工具行{display:flex;flex-wrap:wrap;gap:6px;flex:0 0 auto;margin-bottom:4px}
       .lvp-说明行{flex:0 0 auto;margin-top:4px;color:#8c8c8c;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .lvp-chip{display:inline-block;margin:0 2px;padding:0 6px;background:#3a5f8a;border-radius:8px;color:#cfe6ff}
+      /* 装饰 chip：仅前端可读性标记（subject_definitions:/[Shot N] 等），不引用素材、不可点击；
+         换暖色调以与蓝色引用 chip 目视区分。选择器重叠 .lvp-chip 确保覆盖背景/文字色。 */
+      .lvp-chip.lvp-chip-deco{background:#5a5145;color:#f0e0c8}
       .lvp-缩略{position:relative;display:inline-flex;width:66px;height:66px;margin:0;border:1px solid #3a3a3a;border-radius:6px;overflow:hidden;background:#1a1a1a;vertical-align:middle}
       .lvp-缩略媒{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
       .lvp-音标{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:33px;color:#9ec1e8;background:#1f2a33}
@@ -77,11 +80,12 @@ export function 创建状态栏面板(底栏) {
     const 状态 = 创建状态桥({ 展开: false, 选中段: 0 });
     let 当前节点 = null;
     let 时间轴刷卡 = null;   // 时间轴挂载时注册；状态栏编辑段内容后回调它，局部刷新对应段卡
+    let 时间轴渲染 = null;   // 时间轴挂载时注册；计划数据加载后回调它，整树重建时间轴
 
     // 布局：左=参考文件区（四组按宽度分配铺满），中=提示词编辑区（撑满状态栏高度），
     // 右列=任务类型竖排+首尾帧（水平双列、选图后带预览）。
     const 参考区 = 创建参考文件区(主体, {
-        变更: (素材) => { if (当前节点) 真源.写参考素材(当前节点, 素材); 提示词.刷新弹层?.(); 刷新首尾帧选项(); },
+        变更: (素材) => { if (当前节点) 真源.写参考素材(当前节点, 素材); 提示词.刷新弹层?.(); 刷新首尾帧选项(); 时间轴渲染?.(); },
         // 「全段共用」开关 → 节点隐藏 widget「参考共用」（布尔）；执行核心 _应用全局 据此覆盖段级 refs
         共用变更: (v) => { if (当前节点) 真源.写参考共用(当前节点, v); },
     });
@@ -92,12 +96,15 @@ export function 创建状态栏面板(底栏) {
         百万像素变更: (v) => { if (当前节点 && Number.isFinite(v)) 真源.写百万像素(当前节点, v); },
         // 画风/预设 两个下拉拼出的全局前缀 → 写回节点「全局提示词」（节点上已隐藏）
         全局提示词变更: (文本) => { if (当前节点) 真源.写全局提示词(当前节点, 文本); },
+        // 计划数据组件需要直接读写当前节点的全量 widget，把 getter + 全刷回调递下去
+        取节点: () => 当前节点,
+        全刷: () => 全刷(),
     });
     const 右列 = document.createElement("div");
     右列.className = "lvp-右列";
     主体.appendChild(右列);
     const 类型选择 = 创建生成类型选择(右列, {
-        变更: (标签) => { if (当前节点) 真源.写任务类型(当前节点, 标签); 刷新显隐(标签); },
+        变更: (标签) => { if (当前节点) { 真源.写任务类型(当前节点, 标签); 写当前段任务(标签); } 刷新显隐(标签); },
     });
 
     // 首尾帧区（即梦式）：从全局参考图片中为「当前选中段」挑首/尾帧，写入段 refs.首帧/尾帧。
@@ -196,6 +203,23 @@ export function 创建状态栏面板(底栏) {
         时间轴刷卡?.(i);   // 通知时间轴局部刷新该段卡的提示词预览
     }
 
+    // 全局任务类型切换 → 同步到「当前选中段」的 task（其它段不动，避免误改
+    // 用户故意保留的混合任务时间轴）。后端 _应用全局 优先用 seg.task，不同步会造成
+    // 前端全局显示新任务、实际执行仍走旧 task 的难察觉的不一致。无选中段时直接返回（
+    // 新增段会从全局 widget 拉当前任务码，无需预造段）。
+    function 写当前段任务(标签) {
+        if (!当前节点) return;
+        const tl = 真源.读时间轴(当前节点);
+        const 段组 = tl.segments || [];
+        const i = 状态.取("选中段");
+        if (!段组[i]) return;
+        const 码 = 任务码(标签);
+        if (段组[i].task === 码) return;   // 同码不重写，免无谓的 widget 写入与刷卡
+        段组[i].task = 码;
+        真源.写时间轴(当前节点, { segments: 段组 });
+        时间轴刷卡?.(i);   // 局部刷新段卡的任务徽标/title/缩略图（刷卡 已含任务字段同步）
+    }
+
     function 绑定节点(node) {
         if (当前节点 && 当前节点 !== node) 去编辑标(当前节点);
         当前节点 = node;
@@ -232,6 +256,7 @@ export function 创建状态栏面板(底栏) {
         // 重拉画风/预设清单：用户可能在上次展开后往 预设/ 里新增了 txt。
         // 异步响应回来时会按回填设好的上次文本重新反解析，不会错选。
         提示词.刷新画风预设();
+        提示词.刷新计划列表?.();   // 重拉计划清单（用户可能在上次展开后手动往 计划数据/ 里放了 JSON）
         回填();
     }
     function 收起() { 状态.设("展开", false); 主体.classList.remove("展开"); 标题.textContent = "🎬 长视频规划师（展开）"; 去编辑标(当前节点); }
@@ -240,11 +265,24 @@ export function 创建状态栏面板(底栏) {
     function 设进度(v, m) { if (v != null && m) 状态条.textContent = `生成中 ${v}/${m}`; }
     function 设状态(文本) { 状态条.textContent = 文本; }
 
+    // 全刷：计划数据加载后一次性同步所有 UI。先把 选中段 钳到新时间轴范围内（避免加载 3 段计划
+    // 时 选中段=7 造成提示词区空白），再走 回填() 刷状态栏各组件，最后调时间轴的 渲染() 整树重建。
+    function 全刷() {
+        if (当前节点) {
+            const tl = 真源.读时间轴(当前节点);
+            const 段数 = Array.isArray(tl?.segments) ? tl.segments.length : 0;
+            if (状态.取("选中段") >= 段数) 状态.设("选中段", Math.max(0, 段数 - 1));
+        }
+        回填();
+        时间轴渲染?.();
+    }
+
     // 供时间轴面板联动选中段
     状态.订阅((键) => { if (键 === "选中段") 回填(); });
 
     return {
         绑定节点, 展开, 收起, 设进度, 设状态, 回填, 状态, 取节点: () => 当前节点,
         设时间轴刷卡: (fn) => { 时间轴刷卡 = fn; },
+        设时间轴渲染: (fn) => { 时间轴渲染 = fn; },
     };
 }
