@@ -25,6 +25,8 @@
 - [支持作者](#支持作者)
 
 ---
+## 使用外观
+<img width="3812" height="1586" alt="image" src="https://github.com/user-attachments/assets/5e5c9882-e05d-4367-8268-518ac94d858a" />
 
 ## 能做什么
 
