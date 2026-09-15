@@ -347,7 +347,7 @@ def _全局():
 
 def test_执行时间轴_两段采样再命中缓存(tmp_path, monkeypatch):
     """⚠️#2 + 方案 B 两阶段编排：首轮两段各采样一次、各解码一次；二次全同 → 命中缓存不再采样，
-    但**仍要解码**（缓存里存的是 latent，不是 images）。进度按 2×段数 上报。"""
+    但**仍要解码**（缓存里存的是 latent，不是 images）。进度只反映采样阶段（每段 1 步）。"""
     monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     计数 = _桩两阶段(monkeypatch)
     模型输入 = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None}
@@ -358,7 +358,7 @@ def test_执行时间轴_两段采样再命中缓存(tmp_path, monkeypatch):
     assert 计数 == {"采样": 2, "解码": 2}
     assert "段1: 已采样" in 报告 and "段2: 已采样" in 报告
     assert images.shape[0] == 40 and audio["waveform"].shape[-1] == 40 * 每帧样本
-    assert 进度 == [(1, 4), (2, 4), (3, 4), (4, 4)], f"进度须按 2×段数 上报，实际 {进度}"
+    assert 进度 == [(1, 2), (2, 2)], f"进度只反映采样阶段（每段 1 步），实际 {进度}"
 
     # 再跑一次：参数与锚定信息全同 → 命中缓存（⚠️#2 锚定信息入指纹后仍跨轮稳定命中）
     进度.clear()
@@ -367,7 +367,7 @@ def test_执行时间轴_两段采样再命中缓存(tmp_path, monkeypatch):
     assert 计数 == {"采样": 2, "解码": 4}, "第二次不应再采样，但缓存的 latent 仍须解码"
     assert "段1: 命中缓存" in 报告2 and "段2: 命中缓存" in 报告2
     assert images2.shape[0] == 40
-    assert len(进度) == 4
+    assert len(进度) == 2
 
 
 def test_执行时间轴_坏缓存自愈回退采样(tmp_path, monkeypatch):
@@ -859,10 +859,8 @@ def _三段时间轴():
 
 
 def test_执行时间轴_跳过无缓存段进度仍满格(tmp_path, monkeypatch):
-    """L2：skip 段（未选运行）且无缓存 → 它既不采样也不解码，旧版因此少上报两步：
-    3 段例里只上报过 1,3,4,5 而 max 恒为 6 → 前端进度条卡在 83% 直到节点结束。
-    修法两条：skip 段也占掉它在 Phase 1 的那一步；Phase 2 前把 总步数 从「上界 2N」收敛为
-    「N + 实际解码段数」。本测锁「最后一步恒为 value == max」。"""
+    """L2：skip 段（未选运行）且无缓存 → 它既不采样也不解码，但仍占掉它在 Phase 1 的那一步
+    （进度只反映采样阶段）。本测锁「最后一步恒为 value == max」。"""
     monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     计数 = _桩两阶段(monkeypatch)
     模型输入 = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None}
@@ -874,15 +872,15 @@ def test_执行时间轴_跳过无缓存段进度仍满格(tmp_path, monkeypatch
 
     assert 计数 == {"采样": 2, "解码": 2}, "段2 未选运行且无缓存 → 不采样也不解码"
     assert "段2: 跳过（未选运行）" in 报告
-    # Phase 1 三段各一步（max=6 上界）→ Phase 2 收敛为 3+2=5 → 最后一步满格
-    assert 进度 == [(1, 6), (2, 6), (3, 6), (4, 5), (5, 5)], f"实际 {进度}"
+    # Phase 1 三段各一步（max=3）→ 最后一步满格
+    assert 进度 == [(1, 3), (2, 3), (3, 3)], f"实际 {进度}"
     assert 进度[-1][0] == 进度[-1][1], "最终一步必须 value == max（否则进度条永远到不了 100%）"
     assert images.shape[0] == 40, "段2 断裂 → 段1/段3 各自独立生成，22+22−4=40"
 
 
 def test_执行时间轴_全部跳过无缓存补满格(tmp_path, monkeypatch):
-    """L2 边界：所有段都 skip 且都无缓存 → 一个解码段也没有，Phase 1 的上报停在 (N, 2N)=50%，
-    必须补一发满格（此时 images=None，由节点层报 ValueError，但进度不得卡半）。"""
+    """L2 边界：所有段都 skip 且都无缓存 → 一个解码段也没有，但 Phase 1 仍上报 N 步
+    （进度只反映采样阶段），最后一步自然满格（此时 images=None，由节点层报 ValueError，但进度不得卡半）。"""
     monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     计数 = _桩两阶段(monkeypatch)
     模型输入 = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None}
@@ -894,7 +892,7 @@ def test_执行时间轴_全部跳过无缓存补满格(tmp_path, monkeypatch):
 
     assert 计数 == {"采样": 0, "解码": 0} and images is None and audio is None
     assert 报告.count("跳过（未选运行）") == 3
-    assert 进度 == [(1, 6), (2, 6), (3, 6), (3, 3)], f"末尾须补 (N, N) 满格，实际 {进度}"
+    assert 进度 == [(1, 3), (2, 3), (3, 3)], f"Phase 1 三段各一步，最后一步满格，实际 {进度}"
 
 
 def test_执行时间轴_Phase2流式并入不攒全量段(tmp_path, monkeypatch):
