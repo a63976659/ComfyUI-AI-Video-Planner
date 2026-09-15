@@ -478,12 +478,21 @@ export function 挂载时间轴(node, 面板) {
             const 段组 = 读段();
             const i = 选中(); 段组.splice(i, 1); 写段(段组); 设选中(Math.max(0, i - 1));
         });
+        // 裁剪时深拷贝 refs：确保两半各自拥有独立的素材数组，编辑一段不影响另一段
+        function 深拷refs(refs) {
+            if (!refs) return undefined;
+            const r = { ...refs };
+            if (Array.isArray(r.图片)) r.图片 = [...r.图片];
+            if (Array.isArray(r.音频)) r.音频 = [...r.音频];
+            if (Array.isArray(r.视频)) r.视频 = [...r.视频];
+            return r;
+        }
         const 裁剪 = 建钮("✂裁剪", "", "把选中段从中点一分为二", () => {
             const 段组 = 读段();
             const i = 选中(); const s = 段组[i]; if (!s) return;
             const 中 = s.start + (s.end - s.start) / 2;
-            段组.splice(i + 1, 0, { ...s, start: 中 });
-            段组[i] = { ...s, end: 中 };
+            段组.splice(i + 1, 0, { ...s, start: 中, refs: 深拷refs(s.refs) });
+            段组[i] = { ...s, end: 中, refs: 深拷refs(s.refs) };
             写段(段组);
         });
         const 全选 = 建钮("全选运行", "", "所有段都参与生成", () => { const 段组 = 读段(); 段组.forEach((s) => (s.run = true)); 写段(段组); });

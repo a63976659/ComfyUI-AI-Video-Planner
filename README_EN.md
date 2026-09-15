@@ -264,6 +264,8 @@ Controlled by the "Gradient Transition" toggle (off by default):
 
 If you see smearing, ghosting, or artifacts, first turn Gradient Transition off to check whether it's the model itself.
 
+⚠️ **Flipping this toggle invalidates every segment's cache and forces a full re-sample** (the context frame count is part of each segment's cache fingerprint, so the fingerprint changes as soon as the toggle changes). Segments that were already generated will be redone too — this is **not** just a re-stitch of the seams. Budget enough time for a full run before switching.
+
 **After swapping the checkpoint**
 
 Old segment caches do **not** get invalidated automatically. If you want every segment to be regenerated with the new model, manually delete the subfolder for the current version inside `%TEMP%/h3导演台_段缓存/`.

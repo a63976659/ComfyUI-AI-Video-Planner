@@ -150,6 +150,48 @@ def test__过滤段refs_非字符串值保留():
     assert 缺失 == []
 
 
+def test__过滤段refs_布尔值保留():
+    """段级共用标记（布尔值）原样保留，不参与缺失判定。"""
+    段组 = [{"refs": {"共用": True, "首帧": "a.png"}}]
+    缺失 = []
+    结果 = _过滤段refs(段组, {"a.png"}, 缺失)
+    assert 结果 == [{"refs": {"共用": True, "首帧": "a.png"}}]
+    assert 缺失 == []
+
+
+def test__过滤段refs_数组值过滤缺失文件():
+    """段级素材数组（图片/音频/视频）中不存在的文件被剔除并记录缺失。"""
+    段组 = [{"refs": {"图片": ["a.png", "b.png", "c.png"], "音频": ["x.mp3"]}}]
+    缺失 = []
+    结果 = _过滤段refs(段组, {"a.png", "c.png"}, 缺失)
+    assert 结果 == [{"refs": {"图片": ["a.png", "c.png"], "音频": []}}]
+    assert 缺失 == ["b.png", "x.mp3"]
+
+
+def test__过滤段refs_数组值非字符串项保留():
+    """数组内非字符串项（如 None、数字）原样保留，不参与池校验。"""
+    段组 = [{"refs": {"图片": [None, 123, "a.png", "b.png"]}}]
+    缺失 = []
+    结果 = _过滤段refs(段组, {"a.png"}, 缺失)
+    assert 结果 == [{"refs": {"图片": [None, 123, "a.png"]}}]
+    assert 缺失 == ["b.png"]
+
+
+def test__过滤段refs_混合类型综合():
+    """字符串 + 数组 + 布尔值混合的 refs：各类型分别走对应分支。"""
+    段组 = [{"refs": {
+        "首帧": "a.png", "尾帧": "gone.png",
+        "图片": ["a.png", "gone2.png"], "视频": [],
+        "共用": False,
+    }}]
+    缺失 = []
+    结果 = _过滤段refs(段组, {"a.png"}, 缺失)
+    assert 结果 == [{"refs": {
+        "首帧": "a.png", "图片": ["a.png"], "视频": [], "共用": False,
+    }}]
+    assert 缺失 == ["gone.png", "gone2.png"]
+
+
 # ---------- 过滤缺失素材：monkeypatch 媒体根 ----------
 
 def _注入媒体根(monkeypatch, tmp_path, 文件列表):
@@ -216,6 +258,21 @@ def test_过滤缺失素材_原数据不被修改(monkeypatch, tmp_path):
     原图片 = list(数据["参考素材"]["图片"])
     过滤缺失素材(数据)
     assert 数据["参考素材"]["图片"] == 原图片   # 原数据未变
+
+
+def test_过滤缺失素材_段级素材数组过滤(monkeypatch, tmp_path):
+    """端到端：加载计划时段级 refs 内的素材数组被正确过滤，共用标记保留。"""
+    _注入媒体根(monkeypatch, tmp_path, ["a.png", "b.mp3"])
+    数据 = {"时间轴": {"segments": [
+        {"refs": {"图片": ["a.png", "gone.png"], "音频": ["b.mp3"], "共用": True}},
+        {"refs": {"视频": ["x.mp4"], "首帧": "a.png"}},
+    ]}}
+    新数据, 缺失 = 过滤缺失素材(数据)
+    assert 新数据["时间轴"]["segments"] == [
+        {"refs": {"图片": ["a.png"], "音频": ["b.mp3"], "共用": True}},
+        {"refs": {"视频": [], "首帧": "a.png"}},
+    ]
+    assert 缺失 == ["gone.png", "x.mp4"]
 
 
 def test_过滤缺失素材_无参考素材字段_透传(monkeypatch, tmp_path):

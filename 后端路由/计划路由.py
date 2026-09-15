@@ -108,7 +108,10 @@ def 扫描计划() -> list:
 
 
 def _过滤段refs(段组, 池: set, 缺失: list):
-    """逐段清洗 refs：值是非空字符串且不在池中 → 视为缺失，删该键并追加到缺失清单。
+    """逐段清洗 refs：
+    - 字符串值（首帧/尾帧）不在池中 → 视为缺失，删该键并追加到缺失清单。
+    - 数组值（段级素材 图片/音频/视频）→ 逐项过滤不存在的文件。
+    - 其他值（如 共用 布尔标记）→ 原样保留。
     非 dict 的段原样透传（前端可能塞了脏数据，不阻断加载）。"""
     if not isinstance(段组, list):
         return 段组
@@ -125,6 +128,18 @@ def _过滤段refs(段组, 池: set, 缺失: list):
         for k, v in refs.items():
             if isinstance(v, str) and v and v not in 池:
                 缺失.append(v)
+            elif isinstance(v, list):
+                # 段级素材数组（图片/音频/视频）：逐项过滤不存在的文件
+                保 = []
+                for 名 in v:
+                    if isinstance(名, str) and 名:
+                        if 名 in 池:
+                            保.append(名)
+                        else:
+                            缺失.append(名)
+                    else:
+                        保.append(名)
+                新refs[k] = 保
             else:
                 新refs[k] = v
         新段组.append({**段, "refs": 新refs})
@@ -132,7 +147,7 @@ def _过滤段refs(段组, 池: set, 缺失: list):
 
 
 def 过滤缺失素材(数据: dict) -> tuple:
-    """对照 媒体根() 池过滤参考素材：不存在的文件从清单里剔除，同时清洗每段 refs 首帧/尾帧。
+    """对照 媒体根() 池过滤参考素材：不存在的文件从清单里剔除，同时清洗每段 refs（首帧/尾帧 + 段级素材数组）。
 
     返回 (清洗后的数据副本, 缺失文件名去重清单)。原数据不改（浅拷贝顶层 + 需要动的子字段）。
     媒体根 目录读取失败视为空池 → 所有素材都会被判为缺失；这是极端场景（input 目录不可用），

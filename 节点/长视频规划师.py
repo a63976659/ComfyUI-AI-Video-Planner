@@ -96,7 +96,7 @@ class 长视频规划师(io.ComfyNode):
                 # 末尾则旧存档前 11 个 widget 正确对齐、参考共用 拿默认 False。且与 execute 签名
                 # （参考共用 已是最后一个参数）顺序一致。
                 io.Boolean.Input("参考共用", default=False,
-                                 tooltip="参考生视频(r2v/v2v/rv2v)下开启：所有段统一使用「参考素材」全局池（覆盖段级 refs），只需编辑每段提示词；关闭时段级 refs 优先、全局兜底",
+                                 tooltip="参考生视频(r2v/v2v/rv2v)下开启：所有段统一使用开启段的参考素材（覆盖其他段自有素材），只需编辑每段提示词；关闭时每段使用各自的素材。现已改为段级控制（存储在各段 refs.共用），此全局 widget 仅作向后兼容",
                                  extra_dict={"hidden": True}),   # 节点上不显示，经状态栏参考区右侧开关编辑
                 # 尾帧锚定 同样置于 inputs 末尾（向后兼容铁律，见上 参考共用 注释）：旧存档 widgets_values
                 #   不含本 widget → 载入时拿默认 False（尾帧锚定关闭）。与 execute 签名末位参数一致。

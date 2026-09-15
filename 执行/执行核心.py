@@ -560,9 +560,34 @@ def _解码段(采样产物, vae, audio_vae):
             "锚帧数": int(采样产物.get("锚帧数", 0)), "帧数": int(采样产物.get("帧数", 0))}
 
 
-def _应用全局(seg, 全局参数):
+def _查找共用素材(segments, 全局参数):
+    """查找段级「全段共用」标记：第一个 refs.共用=True 的段的素材将覆盖所有段。
+
+    优先级：段级 refs.共用 > 全局 widget 参考共用（向后兼容）。
+    返回共用素材 dict（图片/音频/视频）或 None（无共用）。"""
+    for seg in segments:
+        refs = seg.refs or {}
+        if refs.get("共用"):
+            return {k: (refs.get(k) or []) for k in ("图片", "音频", "视频")}
+    # 旧版兼容：全局 参考共用=True 时用全局素材池覆盖所有段
+    if 全局参数.get("参考共用"):
+        import json as _json
+        v = 全局参数.get("参考素材")
+        if isinstance(v, str):
+            try:
+                v = _json.loads(v or "{}")
+            except (ValueError, TypeError):
+                v = {}
+        return v if isinstance(v, dict) else {}
+    return None
+
+
+def _应用全局(seg, 全局参数, 共用素材=None):
     """把状态栏全局 widgets 合并进段（SegmentPlan 不可变，返回副本）：
-    运行选择→run（Run-select）、全局提示词→prompt 前缀、参考素材→refs 兜底、任务类型→默认 task。"""
+    运行选择→run（Run-select）、全局提示词→prompt 前缀、参考素材→refs 兜底、任务类型→默认 task。
+
+    共用素材 非空时（某段开了全段共用）：该素材覆盖所有段的 图片/音频/视频；
+    共用素材=None 时：段级 refs 已有的素材保留，全局素材仅兜底缺失的键。"""
     import dataclasses
     import json
 
@@ -587,11 +612,19 @@ def _应用全局(seg, 全局参数):
     prompt = f"{全局提示词}\n{seg.prompt}".strip() if 全局提示词 else seg.prompt
     task = seg.task or 全局参数.get("默认任务") or "t2v"
     refs = dict(seg.refs or {})
-    全局素材 = _读json(全局参数.get("参考素材"))
-    if 全局参数.get("参考共用"):
-        refs.update(全局素材)      # 全段统一：全局池覆盖段级 refs（r2v/v2v/rv2v 只编辑提示词即可）
+    # 移除非素材键（段级共用标记不传给下游 解析槽位/组装参考入参）
+    refs.pop("共用", None)
+    if 共用素材 is not None:
+        # 有段开了全段共用：用共用段的素材覆盖所有段的 图片/音频/视频
+        refs.update(共用素材)
+    elif 全局参数.get("参考共用"):
+        # 向后兼容：直调本函数（未经 执行时间轴 的 _查找共用素材）时仍尊重全局 参考共用 标记
+        全局素材 = _读json(全局参数.get("参考素材"))
+        refs.update(全局素材)
     else:
-        for k, v in 全局素材.items():   # 段级优先，全局兜底
+        # 无共用：段级素材已在 refs 中，全局素材仅兜底缺失的键（向后兼容旧计划）
+        全局素材 = _读json(全局参数.get("参考素材"))
+        for k, v in 全局素材.items():
             refs.setdefault(k, v)
     return dataclasses.replace(seg, run=bool(run), prompt=prompt, task=task, refs=refs)
 
@@ -631,6 +664,10 @@ def 执行时间轴(时间轴数据, 全局参数, 模型输入, node_id, 媒体
     段数 + 实际解码段数（skip-无缓存 的段不解码），故最终一步恒为 100%。"""
     plan = 解析时间轴(时间轴数据)
     上下文帧数 = int(全局参数.get("上下文帧数", 默认上下文帧数))
+    共用素材 = _查找共用素材(plan.segments, 全局参数)
+    # 同步到全局参数副本：_采样段 的音频窗切片据此判断是否启用（段级共用 ON 等同全局共用 ON）
+    全局参数 = dict(全局参数)
+    全局参数["参考共用"] = 共用素材 is not None
     采样参数 = {
         "帧率": int(全局参数.get("帧率", FPS)),
         "宽": int(全局参数.get("宽", 1344)),
@@ -644,10 +681,10 @@ def 执行时间轴(时间轴数据, 全局参数, 模型输入, node_id, 媒体
         "上下文帧数": int(上下文帧数),
         "参考图尺寸": str(全局参数.get("参考图尺寸", "match")),
         "audio_vae": 模型输入.get("audio_vae") is not None,
-        "参考共用": bool(全局参数.get("参考共用")),
+        "参考共用": 共用素材 is not None,
     }
 
-    段列表 = [_应用全局(s, 全局参数) for s in plan.segments]
+    段列表 = [_应用全局(s, 全局参数, 共用素材) for s in plan.segments]
     用到槽 = {选模型槽(s.task) for s in 段列表 if s.run}
     for 槽 in sorted(用到槽):
         if 模型输入.get(f"{槽}_model") is None:
@@ -671,7 +708,7 @@ def 执行时间轴(时间轴数据, 全局参数, 模型输入, node_id, 媒体
     # ========== Phase 1：逐段采样，只留 latent ==========
     # 参考缓存作用域只包住 Phase 1（素材解码只发生在采样侧）；退出 with 即丢引用，
     # 让 Phase 2 的 清理显存 能真把它们 gc 掉，解码前多腾一份空间。
-    with _参考缓存作用域(启用=bool(全局参数.get("参考共用"))):
+    with _参考缓存作用域(启用=共用素材 is not None):
         for seg in 段列表:
             # 锚帧数 由 取尾帧_latent 在上一段末尾算好并一路带下来：它既是本段指纹的一维，
             # 也是本段真锚定时用的值（同一个数），杜绝「指纹算一套、真锚另一套」的假命中。
