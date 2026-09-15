@@ -1,4 +1,4 @@
-# H3导演台依赖说明：
+# 长视频规划师依赖说明：
 # torch / Pillow / numpy / aiohttp 由 ComfyUI 主环境提供，无需在此声明。
 # torchaudio 不再是音频加载的强依赖（已迁至 soundfile + ffmpeg 双层方案，
 # 避开 torchaudio 2.9 的 torchcodec 后端对 FFmpeg full-shared DLL 的依赖）。

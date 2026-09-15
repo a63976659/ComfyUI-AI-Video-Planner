@@ -7,7 +7,7 @@ function toast(文本) { app?.ui?.toast?.showMessage?.(文本); }
 
 export function 创建参考文件区(容器, { 变更, 共用变更 }) {
     const 盒 = document.createElement("div");
-    盒.className = "h3dyt-参考";
+    盒.className = "lvp-参考";
     容器.appendChild(盒);
     let 素材 = { 图片: [], 音频: [], 视频: [] };
     // 「全段共用」开关态（真源在节点 widget「参考共用」，此处仅缓存供渲染）：
@@ -19,35 +19,35 @@ export function 创建参考文件区(容器, { 变更, 共用变更 }) {
         // 三类型横向排列：图像走九宫格（3 列 66px），视频/音频在各自类型名下竖向排列
         for (const 槽 of ["图片", "视频", "音频"]) {
             const 组 = document.createElement("div");
-            组.className = "h3dyt-参考组";
+            组.className = "lvp-参考组";
             const 头 = document.createElement("div");
-            头.className = "h3dyt-参考头";
+            头.className = "lvp-参考头";
             const 标题 = document.createElement("span");
             标题.textContent = `${槽 === "图片" ? "图像" : 槽} ${素材[槽].length}/${上限[槽]}`;
             const 加 = document.createElement("button");
-            加.className = "h3dyt-胶囊"; 加.type = "button";
+            加.className = "lvp-胶囊"; 加.type = "button";
             加.textContent = "＋"; 加.title = "上传" + 槽;
             加.onclick = () => 触发上传(槽);
             头.append(标题, 加);
 
             const 内容 = document.createElement("div");
-            内容.className = 槽 === "图片" ? "h3dyt-九宫" : "h3dyt-竖列";
+            内容.className = 槽 === "图片" ? "lvp-九宫" : "lvp-竖列";
             素材[槽].forEach((名, i) => {
                 const 删 = () => { 素材[槽].splice(i, 1); 提交(); };
                 const 瓦 = document.createElement("span");
-                瓦.className = "h3dyt-缩略";
+                瓦.className = "lvp-缩略";
                 瓦.title = `${i + 1}. ${名}`;
                 if (槽 === "音频") {
                     // 音频无可视封面，统一用音符图标封面（与图/视频缩略图同尺寸）
                     const 音 = document.createElement("span");
-                    音.className = "h3dyt-音标";
+                    音.className = "lvp-音标";
                     音.textContent = "♪";
                     瓦.appendChild(音);
                 } else {
                     // 图片直接 <img>；视频用 #t=0.1 + preload=metadata 取首帧作封面
-                    const url = "/h3dyt/media/file?name=" + encodeURIComponent(名);
+                    const url = "/lvp/media/file?name=" + encodeURIComponent(名);
                     const 媒 = document.createElement(槽 === "图片" ? "img" : "video");
-                    媒.className = "h3dyt-缩略媒";
+                    媒.className = "lvp-缩略媒";
                     if (槽 === "图片") { 媒.src = url; 媒.alt = 名; }
                     else { 媒.src = url + "#t=0.1"; 媒.muted = true; 媒.preload = "metadata"; 媒.playsInline = true; }
                     瓦.appendChild(媒);
@@ -68,13 +68,13 @@ export function 创建参考文件区(容器, { 变更, 共用变更 }) {
         // (r2v/v2v/rv2v) 所有段统一用左侧全局参考池（执行核心 _应用全局 覆盖段级 refs），
         // 用户只需编辑每段提示词；i2v/fl2v 用段级首尾帧、t2v 无参考 → 由 设共用可见 隐藏。
         共用组 = document.createElement("div");
-        共用组.className = "h3dyt-参考组";
+        共用组.className = "lvp-参考组";
         const 共用头 = document.createElement("div");
-        共用头.className = "h3dyt-参考头";
+        共用头.className = "lvp-参考头";
         const 共用标 = document.createElement("span");
         共用标.textContent = "全段共用";
         共用钮 = document.createElement("button");
-        共用钮.className = "h3dyt-胶囊";
+        共用钮.className = "lvp-胶囊";
         共用钮.type = "button";
         共用钮.title = "开启：所有段统一使用左侧全局参考素材（覆盖每段自有 refs），只需编辑各段提示词；关闭：段级 refs 优先、全局兜底";
         共用钮.onclick = () => { 共用 = !共用; 更新共用钮(); 共用变更?.(共用); };
@@ -85,7 +85,7 @@ export function 创建参考文件区(容器, { 变更, 共用变更 }) {
         盒.appendChild(共用组);
     }
 
-    // 开关按钮外观随 共用 态刷新（激活=蓝色胶囊 + "开"，否则灰 + "关"）；复用 .h3dyt-胶囊 样式，无需新增 CSS。
+    // 开关按钮外观随 共用 态刷新（激活=蓝色胶囊 + "开"，否则灰 + "关"）；复用 .lvp-胶囊 样式，无需新增 CSS。
     function 更新共用钮() {
         if (!共用钮) return;
         共用钮.classList.toggle("激活", 共用);
@@ -105,7 +105,7 @@ export function 创建参考文件区(容器, { 变更, 共用变更 }) {
             const fd = new FormData();
             fd.append("file", 文件, 文件.name);
             try {
-                const res = await fetch("/h3dyt/media/upload", { method: "POST", body: fd });
+                const res = await fetch("/lvp/media/upload", { method: "POST", body: fd });
                 const data = await res.json();
                 // HTTP 边界（Task 12 §接口约束 3）：4xx/5xx 走 JSON {error}，fetch 不抛，
                 // 若不判 res.ok 直接读 data.name → undefined 会污染数组（后续 stringify 落

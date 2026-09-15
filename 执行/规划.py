@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""纯逻辑：把导演台时间轴 JSON 解析为不可变 Plan（浅不可变）。不依赖 ComfyUI。"""
+"""纯逻辑：把长视频规划师时间轴 JSON 解析为不可变 Plan（浅不可变）。不依赖 ComfyUI。"""
 import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple

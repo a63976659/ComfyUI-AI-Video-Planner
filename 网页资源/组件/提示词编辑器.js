@@ -41,16 +41,16 @@ function 显示名(标签) {
 
 export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分辨率变更, 百万像素变更, 全局提示词变更 }) {
     const 盒 = document.createElement("div");
-    盒.className = "h3dyt-提示词";
+    盒.className = "lvp-提示词";
     const 编辑区 = document.createElement("div");
-    编辑区.className = "h3dyt-编辑区";
+    编辑区.className = "lvp-编辑区";
     编辑区.contentEditable = "true";
 
     // 工具行：@ 快捷键按钮；后续智能体/规划器/skill 等入口也加在这一行
     const 工具行 = document.createElement("div");
-    工具行.className = "h3dyt-工具行";
+    工具行.className = "lvp-工具行";
     const at按钮 = document.createElement("button");
-    at按钮.className = "h3dyt-胶囊"; at按钮.type = "button";
+    at按钮.className = "lvp-胶囊"; at按钮.type = "button";
     at按钮.textContent = "@"; at按钮.title = "插入参考素材标签";
     at按钮.onclick = () => { 编辑区.focus(); 弹参考列表(at按钮.getBoundingClientRect()); };
     工具行.appendChild(at按钮);
@@ -58,7 +58,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     // 「审查标签」按钮（@ 右侧）：一键审查没有对应上传素材的悬空标签（如 <Video 1> 但未传视频），
     // 二次确认后降级为纯文字 [Video 1]，破坏后端 提取标签 的保留 token 格式，使生成时不再被当引用、不报错。
     const 审查按钮 = document.createElement("button");
-    审查按钮.className = "h3dyt-胶囊"; 审查按钮.type = "button";
+    审查按钮.className = "lvp-胶囊"; 审查按钮.type = "button";
     审查按钮.textContent = "审查标签";
     审查按钮.title = "一键审查：找出没有对应上传素材的悬空标签（如 <Video 1> 但未传视频），二次确认后降级为文字 [Video 1]，避免生成时报错";
     审查按钮.onclick = 审查悬空标签;
@@ -83,7 +83,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     百万像素组.style.cssText = "display:flex;align-items:center;gap:4px";
     百万像素组.textContent = "百万像素";
     // 滑块（0.1–4，步 0.1）+ 右侧实时读数；拖动即回写节点 widget
-    // 🔒 `max` 与下方 设百万像素() 的 `Math.min` 钳位均须 == 后端 导演台._百万像素上限（现 4）：
+    // 🔒 `max` 与下方 设百万像素() 的 `Math.min` 钳位均须 == 后端 长视频规划师._百万像素上限（现 4）：
     //   两处是独立字面量（滑块管拖动、钳位管回填/预设注入的程序赋值），只改其一则另一条路径
     //   仍能越过上限。回归锁：测试/测试_常量同步.py（id `slider-max` / `clamp-math-min`）。
     const 百万像素滑 = document.createElement("input");
@@ -99,12 +99,12 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     工具行.append(分辨率组, 百万像素组);
 
     // 百万像素右边：画风 + 预设 两个下拉（拼接写回节点「全局提示词」widget，该 widget
-    // 在节点上已隐藏）。工具行因此有 6 组控件，窄屏靠 .h3dyt-工具行 的 flex-wrap 换行兜住。
+    // 在节点上已隐藏）。工具行因此有 6 组控件，窄屏靠 .lvp-工具行 的 flex-wrap 换行兜住。
     const 画风预设 = 创建画风预设选择(工具行, { 变更: 全局提示词变更 });
 
     // 编辑说明行：介绍 @ 用法等编辑方法
     const 说明行 = document.createElement("div");
-    说明行.className = "h3dyt-说明行";
+    说明行.className = "lvp-说明行";
     说明行.textContent = "编辑说明：输入 @ 或点上方 @ 按钮弹出参考素材列表，点选插入「图像1/音频1/视频1」标签；回车换行。";
 
     盒.append(工具行, 编辑区, 说明行);
@@ -114,7 +114,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
 
     function 建chip(标签) {
         const span = document.createElement("span");
-        span.className = "h3dyt-chip";
+        span.className = "lvp-chip";
         span.contentEditable = "false";
         span.dataset.tag = 标签;
         span.textContent = 显示名(标签);
@@ -126,7 +126,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
         const 走 = (节点) => {
             节点.childNodes.forEach((子) => {
                 if (子.nodeType === Node.TEXT_NODE) out += 子.textContent;
-                else if (子.classList?.contains("h3dyt-chip")) out += 子.dataset.tag || "";
+                else if (子.classList?.contains("lvp-chip")) out += 子.dataset.tag || "";
                 else if (子.tagName === "BR") out += "\n";
                 else if (子.tagName === "DIV" || 子.tagName === "P") {
                     // Chromium contenteditable 回车会插 <div>（Firefox 插 <br>），不补换行则多行合并为一行 →
@@ -159,7 +159,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
         关弹层();
         const 素材 = 取参考List_安全();
         弹层 = document.createElement("div");
-        弹层.className = "h3dyt-弹层";
+        弹层.className = "lvp-弹层";
         弹层.style.left = (锚rect?.left ?? 100) + "px";
         弹层.style.top = ((锚rect?.bottom ?? 100) + 4) + "px";
         let 有条目 = false;

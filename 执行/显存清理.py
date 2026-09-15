@@ -3,7 +3,7 @@
 import gc
 import logging
 
-_日志 = logging.getLogger("H3导演台.显存清理")
+_日志 = logging.getLogger("长视频规划师.显存清理")
 
 
 def 清理显存(激进: bool = False, 归还缓存: bool = True):

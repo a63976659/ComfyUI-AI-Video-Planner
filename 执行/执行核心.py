@@ -35,7 +35,7 @@ from .官方管线适配 import 调用节点
 from .显存清理 import 清理显存
 from .模型缓存 import 取模型, 清缓存
 
-_日志 = logging.getLogger("H3导演台.执行核心")
+_日志 = logging.getLogger("长视频规划师.执行核心")
 
 # 接缝重叠帧数：与 段间连续.流式拼接 / 预算总帧数 的默认值 4 保持同源，供 ⚠️#4 音频对称裁剪对齐。
 # （拼接段 的默认值也是 4 且与之严格同值，但它已不在生产链上——只作零拷贝单段路径与同值参照。）
@@ -55,7 +55,7 @@ def _计时开启():
       • **合计 不包含 ⑤AV解码**（方案 B 下解码已移出段循环、集中在 Phase 2），故旧日志的
         「合计=306.17s（含⑤52.13s）」不得与新版直接比数，要比就比 ④KSampler 与 ⑤AV解码 单项。
     默认关闭 → 正常路径静默、仅多几次 perf_counter（纳秒级），符合日志规范。环境变量约定同
-    段缓存._缓存根 的 H3_段缓存_DIR。刻意不入段缓存指纹：纯诊断开关、不影响产物。"""
+    段缓存._缓存根 的 长视频规划师_段缓存_DIR。刻意不入段缓存指纹：纯诊断开关、不影响产物。"""
     import os
     return os.environ.get("H3_计时", "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -195,7 +195,7 @@ def _解码音频(路径):
         st = os.stat(路径)
         戳 = f"{st.st_mtime_ns}_{st.st_size}"
         h = hashlib.md5(f"{路径}_{戳}".encode("utf-8")).hexdigest()
-        temp_wav = os.path.join(temp_dir, f"h3dyt_sf_decode_{h}.wav")
+        temp_wav = os.path.join(temp_dir, f"lvp_sf_decode_{h}.wav")
         if not os.path.exists(temp_wav) or os.path.getsize(temp_wav) <= 44:
             # <=44 字节 = 只有 WAV 头/截断的坏缓存（ffmpeg 中途失败留下的），删掉重转
             if os.path.exists(temp_wav):
@@ -511,7 +511,7 @@ def _采样段(seg, 全局参数, 模型输入, 尾帧_video, 尾帧_audio, 锚�
     #    采样器/调度器 由节点 widget 经 全局参数 传入（默认 res_multistep/simple 与历史硬编码一致）。
     sampled = 调用节点("KSampler", model=model_p,
                        seed=int(全局参数.get("种子", 0)) + seg.index,
-                       steps=int(全局参数.get("步数", 20)), cfg=1.0,   # fallback 与 导演台「步数」default 同步
+                       steps=int(全局参数.get("步数", 20)), cfg=1.0,   # fallback 与 长视频规划师「步数」default 同步
                        sampler_name=全局参数.get("采样器", "res_multistep"),
                        scheduler=全局参数.get("调度器", "simple"),
                        positive=positive, negative=positive,

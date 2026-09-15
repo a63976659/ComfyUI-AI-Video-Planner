@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""媒体路由：/h3dyt/media/* 提供文件列表 / 上传 / 去重（文件名+size）。
+"""媒体路由：/lvp/media/* 提供文件列表 / 上传 / 去重（文件名+size）。
 
 并发不变量（与 执行/段缓存.py 同源）：写盘用 `<目标>.<pid>.<序号>.part` 唯一临时名 +
 `os.replace` 原子改名；共用固定 `.part` 会让两个写入者交替写同一临时文件互相截断，
@@ -31,10 +31,10 @@ def 去重键(文件名: str, 大小: int) -> str:
 
 
 def 媒体根() -> str:
-    """参考素材根目录：ComfyUI 输入目录下的 h3导演台_媒体/（用户上传的参考图/音/视频）。
-    公开函数，供 节点/导演台.py 与 执行/执行核心.py 解析文件名。"""
+    """参考素材根目录：ComfyUI 输入目录下的 长视频规划师_媒体/（用户上传的参考图/音/视频）。
+    公开函数，供 节点/长视频规划师.py 与 执行/执行核心.py 解析文件名。"""
     import folder_paths
-    root = os.path.join(folder_paths.get_input_directory(), "h3导演台_媒体")
+    root = os.path.join(folder_paths.get_input_directory(), "长视频规划师_媒体")
     os.makedirs(root, exist_ok=True)
     return root
 
@@ -47,7 +47,7 @@ def 注册路由():
     from server import PromptServer
     routes = PromptServer.instance.routes
 
-    @routes.get("/h3dyt/media/list")
+    @routes.get("/lvp/media/list")
     async def 媒体列表(request):
         root = 媒体根()
         项 = []
@@ -58,7 +58,7 @@ def 注册路由():
                 项.append({"name": 名, "size": 大小, "key": 去重键(名, 大小)})
         return web.json_response({"items": 项})
 
-    @routes.post("/h3dyt/media/upload")
+    @routes.post("/lvp/media/upload")
     async def 媒体上传(request):
         """流式落盘 + 原子改名；参数/Content-Type/multipart 语法错→415/400，IO 失败→500。
 
@@ -110,7 +110,7 @@ def 注册路由():
                     os.remove(临时)
         return web.json_response({"name": 名, "dedup": False, "key": 去重键(名, 大小)})
 
-    @routes.get("/h3dyt/media/file")
+    @routes.get("/lvp/media/file")
     async def 媒体文件(request):
         """按名回传媒体文件（供前端缩略图/预览）；basename 防目录穿越。"""
         名 = os.path.basename(request.query.get("name", ""))

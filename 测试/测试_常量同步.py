@@ -22,9 +22,9 @@ from pathlib import Path
 
 import pytest
 
-comfy_api = pytest.importorskip("comfy_api")   # 导演台 依赖 V3 io；缺宿主则整文件跳过
+comfy_api = pytest.importorskip("comfy_api")   # 长视频规划师 依赖 V3 io；缺宿主则整文件跳过
 节点公用 = pytest.importorskip("节点.节点公用")
-导演台 = pytest.importorskip("节点.导演台")
+长视频规划师 = pytest.importorskip("节点.长视频规划师")
 
 _插件根 = Path(__file__).resolve().parents[1]
 _提示词编辑器 = _插件根 / "网页资源" / "组件" / "提示词编辑器.js"
@@ -39,11 +39,11 @@ _状态栏入口 = _插件根 / "网页资源" / "状态栏入口.js"
 镜像对照 = [
     ("滑块max", "slider-max",
      r'百万像素滑\.max\s*=\s*"?([0-9.]+)"?',
-     lambda: 导演台._百万像素上限,
+     lambda: 长视频规划师._百万像素上限,
      "滑块可拖到的最大值 ↔ 后端 io.Float.Input 的 max"),
     ("钳位Math.min", "clamp-math-min",
      r"Math\.min\(\s*([0-9.]+)\s*,\s*Math\.max\(",
-     lambda: 导演台._百万像素上限,
+     lambda: 长视频规划师._百万像素上限,
      "设百万像素() 程序赋值路径的钳位 ↔ 后端 max。与滑块 max 是**两处独立字面量**："
      "只改其一，回填/预设注入这条程序赋值路径仍会越过另一处"),
     ("默认百万像素", "default-megapixels",
@@ -82,7 +82,7 @@ def test_前后端镜像常量同步_lock(名, id_, 模式, 取真源, 说明, j
     后端 = float(取真源())
     assert 前端 == 后端, (
         f"{名} 漂移：前端 {前端} ≠ 后端 {后端}。{说明}。\n"
-        f"真源在 Python（节点/导演台.py 的 _百万像素上限 或 节点/节点公用.py 的 默认百万像素），"
+        f"真源在 Python（节点/长视频规划师.py 的 _百万像素上限 或 节点/节点公用.py 的 默认百万像素），"
         f"前端 网页资源/组件/提示词编辑器.js 是镜像——改一处必须同步另一处（11 §J3）。"
     )
 
@@ -90,23 +90,23 @@ def test_前后端镜像常量同步_lock(名, id_, 模式, 取真源, 说明, j
 def test_段级进度事件名_前后端同步():
     """字面量镜像锁（**字符串**型，故不进 镜像对照 表——那张表按 float 比数值）。
 
-    后端 `节点/导演台.py` 的 `_进度事件名` 与前端 `网页资源/状态栏入口.js` 里 `addEventListener`
+    后端 `节点/长视频规划师.py` 的 `_进度事件名` 与前端 `网页资源/状态栏入口.js` 里 `addEventListener`
     的事件名必须逐字相等。漂移不报错，只会让状态栏**静默收不到段级进度**（后端往没人听的
     事件名上发、前端等没人发的事件名），表现与「进度条坏了」一模一样、极难定位——正是 J3 要防的
     那类静默不一致。真源在 Python（它决定 websocket 上实际发的事件名）。
 
     另锁一条反面：前端**不得**再监听宿主的 legacy `"progress"`。那条事件由 KSampler 的内部去噪
-    步进触发（宿主 main.py 的 hijack_progress 全局 hook），node_id 取自执行上下文＝导演台节点，
+    步进触发（宿主 main.py 的 hijack_progress 全局 hook），node_id 取自执行上下文＝长视频规划师节点，
     与我方段级进度同 node_id ⇒ 按 node 过滤也分不开，留着就会让状态条在「生成中 3/7」（段）与
-    「5/20」（去噪步）之间来回跳（缘由详 导演台._广播进度 docstring）。"""
+    「5/20」（去噪步）之间来回跳（缘由详 长视频规划师._广播进度 docstring）。"""
     if not _状态栏入口.exists():
         pytest.skip(f"未找到前端源文件：{_状态栏入口}")
     js = _状态栏入口.read_text(encoding="utf-8-sig")
     前端监听 = re.findall(r'api\.addEventListener\(\s*"([^"]+)"', js)
-    后端名 = 导演台._进度事件名
+    后端名 = 长视频规划师._进度事件名
     assert 前端监听.count(后端名) == 1, (
         f"段级进度事件名漂移：后端 _进度事件名={后端名!r}，前端 addEventListener 名单={前端监听}"
-        f"（须恰好含它 1 次：0=已改名/删除，>1=出现第二份通道）。真源在 Python（节点/导演台.py），"
+        f"（须恰好含它 1 次：0=已改名/删除，>1=出现第二份通道）。真源在 Python（节点/长视频规划师.py），"
         f"前端 状态栏入口.js 是镜像——改一处必须同步另一处（11 §J3）。"
     )
     assert "progress" not in 前端监听, (

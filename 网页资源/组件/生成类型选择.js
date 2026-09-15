@@ -2,7 +2,7 @@
 
 export function 创建生成类型选择(容器, { 变更 }) {
     const 盒 = document.createElement("div");
-    盒.className = "h3dyt-类型选择";
+    盒.className = "lvp-类型选择";
     容器.appendChild(盒);
     let 按钮组 = [];
 
@@ -10,7 +10,7 @@ export function 创建生成类型选择(容器, { 变更 }) {
         盒.innerHTML = "";
         按钮组 = (选项数组 || []).map((标签) => {
             const b = document.createElement("button");
-            b.className = "h3dyt-胶囊";
+            b.className = "lvp-胶囊";
             b.type = "button";
             b.textContent = 标签;
             b.onclick = () => { 高亮(标签); 变更?.(标签); };

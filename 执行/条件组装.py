@@ -14,7 +14,7 @@ _管线表 = {
     **{t: "MiniMaxH3ReferenceToVideo" for t in 参考生视频任务},
 }
 
-# task → 模型槽：与 _管线表 同源分组（图生视频↔fl2va、参考生视频↔ref2va）。导演台的
+# task → 模型槽：与 _管线表 同源分组（图生视频↔fl2va、参考生视频↔ref2va）。长视频规划师的
 # 两个模型 socket「fl2va模型 / ref2va模型」按段任务自动匹配；槽名 → 模型输入 键 = f"{槽}_model"。
 _槽表 = {
     **{t: "fl2va" for t in 图生视频任务},
@@ -39,7 +39,7 @@ def 选管线(task: str) -> str:
 
 
 def 选模型槽(task: str) -> str:
-    """task → 模型槽名（"fl2va" / "ref2va"）：与 选管线 同源分组，供导演台按段任务
+    """task → 模型槽名（"fl2va" / "ref2va"）：与 选管线 同源分组，供长视频规划师按段任务
     自动匹配 fl2va模型 / ref2va模型。执行核心以 f"{槽}_model" 从 模型输入 取对应模型。"""
     t = _规范任务(task)
     if t not in _槽表:

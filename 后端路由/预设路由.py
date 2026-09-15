@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""预设路由：GET /h3dyt/preset/options 下发「画风」选项表 +「预设」txt 清单（含正文）。
+"""预设路由：GET /lvp/preset/options 下发「画风」选项表 +「预设」txt 清单（含正文）。
 
 为什么只是只读接口：状态栏的 画风/预设 两个下拉并不新增 widget，而是把
 「画风名 + 换行 + 预设正文」拼接后写回**已有的**「全局提示词」widget（该 widget 已在
@@ -109,7 +109,7 @@ def 注册路由():
     from server import PromptServer
     routes = PromptServer.instance.routes
 
-    @routes.get("/h3dyt/preset/options")
+    @routes.get("/lvp/preset/options")
     async def 预设选项(request):
         """画风选项 + 预设清单。目录级 IO 失败 → 500 JSON {error}（前端能读到 message），
         与 媒体路由 的 HTTP 边界错误契约一致：不让 aiohttp 把异常吞成 text/plain。"""

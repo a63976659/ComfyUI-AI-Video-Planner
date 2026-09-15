@@ -348,7 +348,7 @@ def _全局():
 def test_执行时间轴_两段采样再命中缓存(tmp_path, monkeypatch):
     """⚠️#2 + 方案 B 两阶段编排：首轮两段各采样一次、各解码一次；二次全同 → 命中缓存不再采样，
     但**仍要解码**（缓存里存的是 latent，不是 images）。进度按 2×段数 上报。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     计数 = _桩两阶段(monkeypatch)
     模型输入 = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None}
     进度 = []
@@ -373,7 +373,7 @@ def test_执行时间轴_两段采样再命中缓存(tmp_path, monkeypatch):
 def test_执行时间轴_坏缓存自愈回退采样(tmp_path, monkeypatch):
     """⚠️#3：命中 True 但 读缓存 返回 None（坏文件自愈）→ 必须回退 _采样段，不得直接下标崩。"""
     from 执行.段缓存 import 缓存格式版本
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     模型输入 = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None}
     计数 = _桩两阶段(monkeypatch)
 
@@ -397,7 +397,7 @@ def test_执行时间轴_缺槽模型_按需报错(tmp_path, monkeypatch):
     """Q2 按需校验：时间轴含 t2v（fl2va 管线）但 fl2va模型 未连接（None）→ 采样前即抛明确
     ValueError（点名「fl2va模型」），不跑到一半才崩。反之只跑 t2v 时不校验 ref2va模型
     （见 test_执行时间轴_两段采样再命中缓存：ref2va_model 未用到即不报缺）。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     计数 = _桩两阶段(monkeypatch)
     模型输入 = {"fl2va_model": None, "ref2va_model": object(), "clip": None, "vae": None}
     with pytest.raises(ValueError, match="fl2va模型"):
@@ -410,7 +410,7 @@ def test_执行时间轴_按段选模型(tmp_path, monkeypatch):
     每段送进 _采样段 的 模型输入["model"] 必须是该段任务对应槽的模型（t2v 拿 fl2va_model、
     r2v 拿 ref2va_model），无需用户手动切换。spy _采样段 捕获每段实际拿到的 model 身份。"""
     import json
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     拿到 = []
 
     def spy采样(seg, 全局, 段模型输入, *a, **k):
@@ -509,7 +509,7 @@ def test_跳过段无缓存_下段独立不锚(tmp_path, monkeypatch):
     （时间轴已断裂，下段作为独立段生成，不锚到“两段之前”的旧素材）；锚帧数 同步归 0——
     它既入指纹又是真锚定用的值，留着非零会让指纹与产物互相矛盾。"""
     import json
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     锚记录 = []
 
     def spy采样(seg, 全局, 模型, 尾帧_video, 尾帧_audio, 锚帧数, 媒体):
@@ -542,7 +542,7 @@ def test_段间锚定传递latent而非像素(tmp_path, monkeypatch):
     后果是官方 PackedLayout 把像素当 latent 打包 → 模型内部形状错或静默产出错乱画面。
     同时锁 锚帧数 与切片长度同源（22 帧 ↔ 7 个 video token、37 个 audio token）。"""
     from 执行.段间连续 import _video_latent_t
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     锚记录 = []
 
     def spy采样(seg, 全局, 模型, 尾帧_video, 尾帧_audio, 锚帧数, 媒体):
@@ -567,7 +567,7 @@ def test_命中缓存的段仍向下游传锚(tmp_path, monkeypatch):
     """缓存命中的段同样要切尾帧给下段：命中分支只 append 产物、忘了更新尾帧的话，下段会锚到
     「两段之前」的旧素材（画面回跳一截）而不报错。用「段0 已落盘、段1 首轮」构造：第二轮里
     段0 命中缓存，段1 仍须拿到段0 的尾帧。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     锚记录 = []
 
     def spy采样(seg, 全局, 模型, 尾帧_video, 尾帧_audio, 锚帧数, 媒体):
@@ -623,7 +623,7 @@ def test_采样产物_真落盘可读回(tmp_path, monkeypatch):
     症状只是「没改参数却每次都重跑」，无报错、极难定位。故本测正反两面都锁。"""
     from 执行.段缓存 import 段指纹, 写缓存, 读缓存
     NestedTensor = pytest.importorskip("comfy.nested_tensor").NestedTensor
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
 
     产物 = _采样产物(帧数=124, 锚=22, index=3)
     写缓存("nB落盘", 3, 段指纹({"task": "t2v"}, {"宽": 1344}), 产物)
@@ -731,7 +731,7 @@ def test_执行时间轴_坏形状缓存判未命中不崩(tmp_path, monkeypatch
     → 回退重采样，而不是在 Phase 2 取 ["video_latent"] 时抛 KeyError 越过 ValueError-only 契约。
     这正是 缓存格式版本 h3-3→h3-4 升版遗漏时的实际后果（旧文件被同一指纹命中）。"""
     from 执行.段缓存 import 缓存格式版本
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     计数 = _桩两阶段(monkeypatch)
     模型输入 = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None}
 
@@ -763,7 +763,7 @@ def test_执行时间轴_不自洽缓存判未命中不抛ValueError(tmp_path, m
     再把守卫退回旧口径做**反证**（同一批坏文件就会一路走到 Phase 2 才抛）。"""
     from 执行.段缓存 import 缓存格式版本
     from 执行.段间连续 import _latent_t_转帧数
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     模型输入 = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None}
 
     def 解码按latent时长(采产物, *a):
@@ -804,7 +804,7 @@ def test_执行时间轴_Phase2解pin让出显存(tmp_path, monkeypatch, _重置
     被钉住的模型排最后才卸；不先 清缓存() 就解码，16GB 卡上 DiT 仍占显存 → VAEDecode
     触发 offload 数据乒乓，正是本方案要治的 ⑤52s→839s。"""
     from 执行 import 模型缓存
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     采样期pin, 解码期pin = [], []
 
     def 采样并记pin(seg, *a):
@@ -830,7 +830,7 @@ def test_执行时间轴_锚帧数一路带到裁前缀(tmp_path, monkeypatch):
     _裁并拼 据此裁掉被锚定的重复前缀（images 与 audio 同步）。任一环丢值都会让成片多一段重复
     画面且 A/V 漂移，全程无报错。用「上下文帧数=5」构造可整除的算术（桩内已把 帧数 对齐到
     22 帧）：段1 锚 5 帧 → 22 帧裁成 17 帧 → 拼接 22+17−4=35 帧；音频 2200+(1700−400)=3500=35×100 样本。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
 
     def 采样带锚(seg, 全局, 模型, 尾帧_video, 尾帧_audio, 锚帧数, 媒体):
         return _采样产物(index=seg.index, 锚=锚帧数)   # 真身语义：锚帧数原样透传进产物
@@ -863,7 +863,7 @@ def test_执行时间轴_跳过无缓存段进度仍满格(tmp_path, monkeypatch
     3 段例里只上报过 1,3,4,5 而 max 恒为 6 → 前端进度条卡在 83% 直到节点结束。
     修法两条：skip 段也占掉它在 Phase 1 的那一步；Phase 2 前把 总步数 从「上界 2N」收敛为
     「N + 实际解码段数」。本测锁「最后一步恒为 value == max」。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     计数 = _桩两阶段(monkeypatch)
     模型输入 = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None}
     进度 = []
@@ -883,7 +883,7 @@ def test_执行时间轴_跳过无缓存段进度仍满格(tmp_path, monkeypatch
 def test_执行时间轴_全部跳过无缓存补满格(tmp_path, monkeypatch):
     """L2 边界：所有段都 skip 且都无缓存 → 一个解码段也没有，Phase 1 的上报停在 (N, 2N)=50%，
     必须补一发满格（此时 images=None，由节点层报 ValueError，但进度不得卡半）。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     计数 = _桩两阶段(monkeypatch)
     模型输入 = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None}
     进度 = []
@@ -905,7 +905,7 @@ def test_执行时间轴_Phase2流式并入不攒全量段(tmp_path, monkeypatch
     流式写入把峰值压到 成片(N) + 当前段(1) ≈ 20GB——方案 B 把 DiT 请出显存后，这就是下一个瓶颈。
     spy 流式拼接 验三件事：① 预算在**解码前**就算好且等于实际写入量；② 解码与追加交错（非批量）；
     ③ 返回的 images 就是 流式拼接.结果()。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     顺序 = []
     真类 = 执行核心.流式拼接
 
@@ -939,7 +939,7 @@ def test_执行时间轴_预算对不上实际写入则抛不静默(tmp_path, mo
     """流式并入的反面：解码出的帧数与采样产物[帧数] 不符（缓存被外力改坏、或日后改了 对齐帧数 忘同步）
     → 预分配尺寸对不上写入量，必须由 流式拼接._容得下 抛 ValueError，而不是静默丢帧
     （丢帧 = 成片时长短于时间轴、A/V 漂移且全程无告警）。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
 
     def 解码多出帧(采产物, *a):
         return _产物(T=采产物["帧数"] + 3, 锚=采产物["锚帧数"])   # 故意比预算多 3 帧
@@ -983,7 +983,7 @@ def test_应用全局_参考共用_全局覆盖段级():
 
 def test_采样参数_参考图尺寸与audio_vae入指纹(tmp_path, monkeypatch):
     """C1 契约锁：_采样段 实际消费与产物相关的另两维必须入指纹，否则改后仍命中旧缓存。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     计数 = _桩两阶段(monkeypatch)
     模型输入无v = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None}
     模型输入有v = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None, "audio_vae": object()}
@@ -1007,7 +1007,7 @@ def test_拼接_音频段数不足告警(tmp_path, monkeypatch):
     """I2 契约锁：若 段产物 中存在 audio=None 而其他段有 audio，报告行必留告警 tripwire。
     audio=None 只能出自解码侧（audio_vae 未接/中途接入），故桩在 _解码段；顺带证明
     采样产物里的 index 一路带到了 Phase 2（否则无法按段号区分丢哪一段的音频）。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
 
     def 解码丢中段audio(采样产物, *a):
         产 = _产物(T=采样产物["帧数"], 锚=采样产物["锚帧数"])
@@ -1089,7 +1089,7 @@ def test_采样段_参考共用_门控音频窗(monkeypatch):
 def test_采样参数_参考共用入指纹(tmp_path, monkeypatch):
     """B 契约锁：参考共用 必须入段缓存指纹。构造段无自有 refs、全局也无参考素材 → 开/关共用时
     seg.refs 与 start/end 全同，唯一差异是音频切片与否；若不入指纹则假命中（改了开关产物不变）。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     计数 = _桩两阶段(monkeypatch)
     模型输入 = {"fl2va_model": object(), "ref2va_model": object(), "clip": None, "vae": None}
     基 = {"帧率": _FPS, "宽": 1344, "高": 768, "上下文帧数": 22, "种子": 1, "步数": 25}
@@ -1106,10 +1106,10 @@ def test_采样参数_参考共用入指纹(tmp_path, monkeypatch):
 def test_执行时间轴_参考共用门控缓存启用(tmp_path, monkeypatch):
     """P1 **接线**契约锁：执行时间轴 必须以 参考共用 开关决定是否启用参考缓存。
     缓存是轮内累积的（退出 with 才丢引用）：ON 时全段共用同一批素材、命中率 100% →
-    纯收益；OFF（导演台.py 的缺省值）时段级 refs 优先、各段素材通常互不相同 → 命中率低
+    纯收益；OFF（长视频规划师.py 的缺省值）时段级 refs 优先、各段素材通常互不相同 → 命中率低
     而峰值从「单段素材量」涨到「全轮素材总量」（10 段各带一条 15s 参考视频即 10×4.5GB）。
     只测 _参考缓存作用域 的 启用 参数拦不住「调用处忘了传开关」这类回归，故本测盯接线。"""
-    monkeypatch.setenv("H3_段缓存_DIR", str(tmp_path))
+    monkeypatch.setenv("长视频规划师_段缓存_DIR", str(tmp_path))
     捕获 = []
     真作用域 = 执行核心._参考缓存作用域
 
@@ -1283,7 +1283,7 @@ def test_缩放到画布_降级返回原对象且只告警一次(monkeypatch, ca
     monkeypatch.setattr(执行核心, "_缩放降级已告警", False)
     monkeypatch.setitem(sys.modules, "comfy.utils", None)
     帧 = torch.zeros((1, 8, 8, 3))
-    with caplog.at_level(logging.WARNING, logger="H3导演台.执行核心"):
+    with caplog.at_level(logging.WARNING, logger="长视频规划师.执行核心"):
         for _ in range(3):                      # 模拟逐帧调用
             out = 执行核心._缩放到画布(帧, 32, 32)
             assert out is 帧, "降级须返回原对象（不复制）"

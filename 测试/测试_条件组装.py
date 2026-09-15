@@ -30,7 +30,7 @@ def test_选管线_非字符串抛ValueError():
 
 def test_选模型槽():
     """双模型：task → 模型槽，与 选管线 同源分组（图生视频族→fl2va、参考生视频族→ref2va）。
-    导演台据此按段任务自动匹配 fl2va模型 / ref2va模型；执行核心以 f"{槽}_model" 取对应模型。"""
+    长视频规划师据此按段任务自动匹配 fl2va模型 / ref2va模型；执行核心以 f"{槽}_model" 取对应模型。"""
     for t in ("t2v", "i2v", "fl2v"):
         assert 选模型槽(t) == "fl2va"
     for t in ("r2v", "v2v", "rv2v"):

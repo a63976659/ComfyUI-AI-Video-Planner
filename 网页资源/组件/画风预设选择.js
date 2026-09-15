@@ -2,7 +2,7 @@
 // 「全局提示词」在节点上已隐藏（后端 extra_dict.hidden + 状态栏入口.js 的 widget.hidden 双路径），
 // 真源仍是该 widget，执行链（执行核心._应用全局 把它作段 prompt 前缀）不变。
 //
-// 选项来自 GET /h3dyt/preset/options：{画风:[名], 预设:[{显示名,路径,内容}]}。
+// 选项来自 GET /lvp/preset/options：{画风:[名], 预设:[{显示名,路径,内容}]}。
 // 单一真源在后端 后端路由/预设路由.py，前端不镜像硬编码画风表。
 //
 // 回填靠反解析（widget 里只有拼接后的纯文本，没有选中项元数据）：
@@ -12,7 +12,7 @@
 // 余量 这一路是为了不吞掉旧工作流里手写的全局提示词：反解析失败时两个下拉都显示（无），
 // 但用户之后任选一项，原文本仍会跟在后面写回，不会静默丢失。
 
-const 选项接口 = "/h3dyt/preset/options";
+const 选项接口 = "/lvp/preset/options";
 const 无 = "（无）";
 const 控件样式 = "background:#1c1c1c;color:#ddd;border:1px solid #444;border-radius:3px;max-width:132px";
 // 预设正文来自磁盘文件，可能是 CRLF；widget 里存的与前端比对用的统一按 LF 归一，
@@ -115,7 +115,7 @@ export function 创建画风预设选择(容器, { 变更 }) {
             if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
         } catch (e) {
             // 拉取失败保留已有清单（不清空），只留控制台痕迹：画风/预设缺失不该淹没整个状态栏
-            console.warn("[H3导演台] 画风/预设选项拉取失败：", e);
+            console.warn("[长视频规划师] 画风/预设选项拉取失败：", e);
             return;
         }
         画风列表 = Array.isArray(data?.画风) ? data.画风 : [];
