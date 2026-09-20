@@ -353,7 +353,10 @@ git clone <本仓库地址>
 
 - **Star 本仓库** ⭐
 - **分享你的作品**：用本插件做出的视频，欢迎在 Issue 里展示
-- **赞助**：（这里换成你的爱发电 / Ko-fi / 微信支付宝二维码）
+- **赞助**：
+<img width="400" height="500" alt="微信图片_20260920163034" src="https://github.com/user-attachments/assets/47f64c6e-cc45-4395-9b9e-29f464d12df2" />
+<img width="400" height="500" alt="微信图片_20260920163043" src="https://github.com/user-attachments/assets/7bfb521a-6f24-4104-89c0-016dcf74834b" />
+
 
 ---
 
