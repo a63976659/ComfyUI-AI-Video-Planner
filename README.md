@@ -335,6 +335,18 @@ git clone <本仓库地址>
 
 ---
 
+## 致谢
+
+- **[Comfy-Org / ComfyUI](https://github.com/Comfy-Org/ComfyUI)**：本插件的宿主环境。整个都构建在 ComfyUI 的 V3 节点 API、执行器与缓存机制之上；前端面板、设置页、主题变量亦全部复用 ComfyUI 前端框架。
+所有真正的视频/音频生成、采样、VAE 解码（含 `_empty_av_latent`、PackedLayout、`node_helpers` 等）均由官方节点完成。本插件刻意「不 patch、不 fork 宿主」，只在其外围做编排与产物的裁切拼接。
+- **[MiniMax H3](https://github.com/MiniMax-AI/MiniMax-H3)（稀宇科技 MiniMax）**：多段视频/音频生成的核心基座模型，本插件的 6 种任务与 24fps 时间基座都来自它。
+- **[AIMixer 导演台](https://github.com/AIMixer/ComfyUI_MiniMaxH3_Director)**、**[H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context)**、**[H3-Multishot](https://github.com/jlucasmcrell/ComfyUI-H3-Multishot)**、**[H3-Codex-Drama](https://github.com/chiphoton/MiniMax-H3-Codex-Drama)**、**[H3-SelfLift](https://github.com/facok/comfyui-SelfLift)**：同为 MiniMax H3 生成式管线的社区节点，段间 latent 直切、音频延续窗、`context_length` 参数取值、「样板段先确认 / 不侵入宿主」等理念与它们相互印证。
+- **[AIVideo_node](https://github.com/a63976659/ComfyUI-AIVideo_node)**、**[NodeCraft AI](https://github.com/a63976659/ComfyUI-NodeCraft-AI) 知识库**：LLM 调用重试、设置持久化与联动 UI 等局部实现的经验来源。
+
+
+---
+
+
 ## 支持作者
 
 如果这个插件帮到你了：
