@@ -17,7 +17,10 @@ prompt 前缀）零改动，故后端只需提供选项数据，不接收写入�
 预设以完成回填。编码按 Windows 中文习惯依次尝试 utf-8-sig / gbk，最后 utf-8 replace
 兜底——记事本另存的 ANSI(GBK) txt 若直接按 utf-8 读会整篇乱码进 prompt。
 """
+import asyncio
 import os
+import threading
+from collections import OrderedDict
 
 from aiohttp import web
 
@@ -38,6 +41,12 @@ _已注册 = False
 
 _预设文件夹名 = "预设"
 _预设后缀 = ".txt"
+
+# 4阶段 B5：预设扫描结果按「目录签名（逐项 mtime_ns + size）」缓存，目录未变则不重读正文；
+# 缓存有界（最多 _预设缓存上限 个根）+ 线程安全（扫描跑在 executor 线程）。
+_预设缓存: "OrderedDict[str, tuple]" = OrderedDict()
+_预设缓存上限 = 8
+_预设锁 = threading.Lock()
 
 
 def 插件根() -> str:
@@ -64,30 +73,18 @@ def 读文本(路径: str) -> str:
     return 原始.decode("utf-8", errors="replace")
 
 
-def 扫描预设() -> list[dict]:
-    """扫描 预设根 下最高两层 .txt → [{"显示名","路径","内容"}]，按显示名排序。
-
-    只读两层：根目录直下的 .txt，以及根目录下一层子文件夹里的 .txt；更深层级忽略。
-    单个文件读失败（被占用/无权限）只跳过该文件，不让整份清单变成 500。
-    """
-    root = 预设根()
-    项: list[dict] = []
-
-    def 收(相对: str, 显示名: str):
-        try:
-            内容 = 读文本(os.path.join(root, *相对.split("/")))
-        except OSError:
-            return
-        项.append({"显示名": 显示名, "路径": 相对, "内容": 内容})
-
+def _预设清单(root: str) -> list:
+    """列 预设根 下最高两层 .txt → [(相对路径, 显示名, 绝对路径)]（只列不读正文）。
+    只读两层：根目录直下的 .txt，以及根目录下一层子文件夹里的 .txt；更深层级忽略。"""
+    出 = []
     try:
         一层 = sorted(os.listdir(root))
     except OSError:
-        return 项
+        return 出
     for 名 in 一层:
         p = os.path.join(root, 名)
         if os.path.isfile(p) and 名.lower().endswith(_预设后缀):
-            收(名, os.path.splitext(名)[0])
+            出.append((名, os.path.splitext(名)[0], p))
         elif os.path.isdir(p):
             try:
                 二层 = sorted(os.listdir(p))
@@ -96,9 +93,48 @@ def 扫描预设() -> list[dict]:
             for 子 in 二层:
                 sp = os.path.join(p, 子)
                 if os.path.isfile(sp) and 子.lower().endswith(_预设后缀):
-                    收(f"{名}/{子}", f"{名}/{os.path.splitext(子)[0]}")
-    项.sort(key=lambda x: x["显示名"])
-    return 项
+                    出.append((f"{名}/{子}", f"{名}/{os.path.splitext(子)[0]}", sp))
+    return 出
+
+
+def _目录签名(清单: list) -> tuple:
+    """逐项 (相对路径, mtime_ns, size) 有序元组；作为缓存失效判据。只 stat 不读正文，
+    远便宜于每次 read 全部文件；任一项增/删/改即变。stat 失败（被删）记 (None, None)。"""
+    元 = []
+    for 相对, _显示, 路径 in 清单:
+        try:
+            st = os.stat(路径)
+            元.append((相对, st.st_mtime_ns, st.st_size))
+        except OSError:
+            元.append((相对, None, None))
+    return tuple(元)
+
+
+def 扫描预设() -> list:
+    """扫描 预设根 下最高两层 .txt → [{"显示名","路径","内容"}]，按显示名排序。
+
+    带目录签名的有界缓存（B5）：未变化直接回缓存、不重读正文；单文件读失败只跳过该项。
+    本函数含阻塞 IO，由 async handler 经 run_in_executor 调用，不跑在事件循环上。"""
+    root = 预设根()
+    with _预设锁:
+        清单 = _预设清单(root)
+        签 = _目录签名(清单)
+        缓存 = _预设缓存.get(root)
+        if 缓存 and 缓存[0] == 签:
+            _预设缓存.move_to_end(root)                # LRU：命中即置为最近使用
+            return 缓存[1]
+        项 = []
+        for 相对, 显示名, 路径 in 清单:
+            try:
+                内容 = 读文本(路径)
+            except OSError:
+                continue
+            项.append({"显示名": 显示名, "路径": 相对, "内容": 内容})
+        项.sort(key=lambda x: x["显示名"])
+        _预设缓存[root] = (签, 项)
+        while len(_预设缓存) > _预设缓存上限:
+            _预设缓存.popitem(last=False)              # 有界：淘汰最久未用
+        return 项
 
 
 def 注册路由():
@@ -114,7 +150,8 @@ def 注册路由():
         """画风选项 + 预设清单。目录级 IO 失败 → 500 JSON {error}（前端能读到 message），
         与 媒体路由 的 HTTP 边界错误契约一致：不让 aiohttp 把异常吞成 text/plain。"""
         try:
-            预设 = 扫描预设()
+            # B5：预设正文读取移出事件循环（扫描含文件 IO + 缓存），不卡住 aiohttp
+            预设 = await asyncio.get_running_loop().run_in_executor(None, 扫描预设)
         except OSError as e:
             return web.json_response({"error": f"预设目录读取失败：{e}"}, status=500)
         return web.json_response({"画风": 画风选项, "预设": 预设})

@@ -26,7 +26,7 @@ _步数上限 = 10000
 _进度事件名 = "长视频规划师_进度"
 
 
-def _广播进度(node_id, 当前, 总数):
+def _广播进度(node_id, 当前, 总数, 事件信息=None):
     """把段级进度推到自有 websocket 通道，供状态栏面板显示「生成中 3/7（段）」。
 
     ⚠️ 为何必须自有通道（而非复用宿主的进度事件）：
@@ -39,13 +39,20 @@ def _广播进度(node_id, 当前, 总数):
         也一样分不开（它按 node_id 键，两者同键）。
       ⇒ 按 `node` 过滤只能滤掉**别的**节点，滤不掉同节点的 KSampler 步进；唯一可靠区分是自有事件名。
 
+    3.1(98)：事件信息 可选。传入时（来自 执行时间轴 的 `_发进度`）与基础 payload 合入，
+    前端可用 run/stage/segment/stage_done/stage_total 做两阶段可视化与 stale 丢弃；不传（向后
+    兼容的 2 形参 调用）仅发 {node, value, max}，旧前端行为不变。
+
     best-effort：拿不到 PromptServer（无服务器上下文/单测）或 send_sync 报错都**吞掉**——
     进度上报失败绝不能把已跑了数小时的生成轮次拖成报错。try 体只含宿主 API 调用、无我方
     逻辑，故宽 except 不会把我方 bug 洗成静默（同 段缓存.读缓存 第 2 层的口径）。"""
     try:
         from server import PromptServer
         srv = PromptServer.instance
-        srv.send_sync(_进度事件名, {"node": node_id, "value": 当前, "max": 总数}, srv.client_id)
+        数据 = {"node": node_id, "value": 当前, "max": 总数}
+        if 事件信息:
+            数据.update(事件信息)
+        srv.send_sync(_进度事件名, 数据, srv.client_id)
     except Exception:  # noqa: BLE001 - try 体仅第三方调用（见 docstring），进度失败不得影响生成
         pass
 
@@ -103,6 +110,25 @@ class 长视频规划师(io.ComfyNode):
                 io.Boolean.Input("尾帧锚定", default=False,
                                  tooltip="开启：把上一段的尾帧/尾音频锚入下一段（等效官方 MiniMaxH3AddGuide，但直接传 latent、不经解码再编码，故更快也更保真），接缝处再做 4 帧交叉淡化；关闭：各段独立生成、接缝硬切、不做任何过渡处理。默认关闭",
                                  extra_dict={"hidden": True}),   # 节点上不显示，经时间轴工具条「尾帧锚定」开关编辑
+                # 剪辑草稿 同样置于 inputs 末尾（向后兼容铁律，见 参考共用 注释）：旧存档不含本 widget
+                #   → 载入时拿默认空草稿。
+                # 🔒 fix18a3：剪辑草稿 真源已迁至前端 node.properties.剪辑草稿——properties 随工作流序列化保存，
+                #   但**不进入 prompt / 执行缓存签名**，故编辑草稿不会作废节点缓存、不触发重执行。本 widget 退化为
+                #   **恒默认值的占位/迁移载体**：保留它一是避免删 input 致旧存档 widgets_values 位置错位，二是供
+                #   状态栏入口.js onConfigure 把旧工作流存于 widget 的草稿迁入 properties 后重置为默认。widget 值恒默认、
+                #   永不承载数据 ⇒ 对执行缓存签名无影响。生成链路只消费 时间轴数据，execute 接收本参数但有意忽略。
+                # ⚠️ 不加 extra_dict={"hidden":True}：剪辑草稿 与 时间轴数据 同属「multiline JSON、由 DOM
+                #   组件接管编辑」的 widget，隐藏走 时间轴面板.js 幽灵widget 名单（步骤5）而非 extra_dict。
+                #   若误加 extra_dict hidden，会被 测试_常量同步.py::test_隐藏widget名_前后端同步 计入后端隐藏
+                #   集合（变 6 项），而前端 状态栏入口.js 隐藏widget名 仍 5 项 → 该镜像锁失败。
+                io.String.Input("剪辑草稿", multiline=True, default='{"brief":{},"segments":[]}'),
+                # 缓存失效版本 同样置于 inputs 末尾（向后兼容铁律，见 参考共用 注释）：旧存档不含本 widget
+                #   → 载入时拿默认 0（不因子把既有段缓存误作废）。§B-2：模/CLIP/VAE 只在上游 loader 携带
+                #   内容绑定、可复现标识（约定属性 lvp_模型身份，由 执行核心.提取模型链身份 自动纳入指纹）时才会
+                #   自动感知换 ckpt；ComfyUI 自带 loader 不提供此类标识（也不每段扫权重）→ 换型后把本值 +1
+                #   即可整体作废段缓存重采样（可靠兼底）。普通可见数值 widget（非 hidden），无需前端镜像同步。
+                io.Int.Input("缓存失效版本", default=0, min=0, max=999999, step=1,
+                             tooltip="换模型/权重后手动 +1 以整体作废段缓存重采样（自动失效需 loader 携带可复现模型标识）；默认 0"),
             ],
             outputs=[
                 io.Image.Output("图像"),
@@ -115,10 +141,33 @@ class 长视频规划师(io.ComfyNode):
         )
 
     @classmethod
+    def fingerprint_inputs(cls, **kwargs):
+        """§B-4：V3 IS_CHANGED——把「时间轴引用素材的文件内容」补进宿主缓存签名。
+
+        为何需要：同名换内容（绕过上传直接换盘上文件）时，时间轴数据/参考素材 等 widget 值
+        不变、也无上游模型链变化 → 宿主按输入签名判“未变”而**跳过 execute**，我方磁盘段缓存
+        根本没机会被查 → 陈旧产物。本指纹仅**叠加**素材内容这一维（缓存签名仍含全部 widget 值，
+        见 caching.py:117），内容一变即重跑；模型/CLIP/VAE 靠连线依赖失效，无需入本指纹。
+        不覆写 validate_inputs（I1）：本方法只影响重跑判定，不关原生入参校验。
+        异常不外抛：真发生异常时交由宿主按 NaN 处理＝保守重跑（宁可重算也不给陈旧产物）。"""
+        try:                                        # ComfyUI 运行时（包形式加载）
+            from ..执行.执行核心 import _外部依赖指纹
+            from ..后端路由.媒体路由 import 媒体根 as 取媒体根
+        except ImportError:                         # pytest（插件根在 sys.path，`..` 越界）I4
+            from 执行.执行核心 import _外部依赖指纹
+            from 后端路由.媒体路由 import 媒体根 as 取媒体根
+        return _外部依赖指纹(
+            kwargs.get("时间轴数据") or '{"segments":[]}',
+            取媒体根(),
+            kwargs.get("缓存失效版本", 0))
+
+    @classmethod
     def execute(cls, *, fl2va模型=None, ref2va模型=None, CLIP编码器, 视频VAE, 音频VAE,
                 任务类型, 全局提示词, 时间轴数据, 参考素材, 运行选择, 帧率,
                 输出分辨率, 百万像素, 步数, 采样器, 调度器,
-                参考共用=False, 尾帧锚定=False):
+                参考共用=False, 尾帧锚定=False, 剪辑草稿='{"brief":{},"segments":[]}',
+                缓存失效版本=0):
+        # 剪辑草稿：widget 恒为默认值占位（真源已迁前端 node.properties，详 schema 注释）；生成链路只消费 时间轴数据 ⇒ 有意忽略。
         try:                                        # ComfyUI 运行时（以包形式加载）
             from ..执行.执行核心 import 执行时间轴
             from ..后端路由.媒体路由 import 媒体根
@@ -140,6 +189,9 @@ class 长视频规划师(io.ComfyNode):
             "默认任务": 解析任务(任务类型), "全局提示词": 全局提示词,
             "参考素材": 参考素材, "运行选择": 运行选择,
             "参考共用": bool(参考共用),
+            # §B-2：换 ckpt 无可证模型标识时的手动作废入口；int 归一防前端传字符串造成
+            #   指纹类型敏感（json 区分 0 与 "0"）。执行核心 将其入采样参数（不入则无效果）。
+            "缓存失效版本": int(缓存失效版本 or 0),
         }
         # 尾帧锚定开关 → 上下文帧数（段间锚定 + 接缝过渡的**统一门控**）：执行核心以「上下文帧数>0」
         #   同时判定两件事：① 是否把上一段尾帧/尾音频 latent 锚入下一段（取尾帧_latent / _采样段
@@ -155,12 +207,13 @@ class 长视频规划师(io.ComfyNode):
         模型输入 = {"fl2va_model": fl2va模型, "ref2va_model": ref2va模型,
                     "clip": CLIP编码器, "vae": 视频VAE, "audio_vae": 音频VAE}
 
-        def 进度(当前, 总数):
+        def 进度(当前, 总数, 事件信息=None):
             # V3 set_progress(value, max_value, node_id)；显式带 node_id，避免依赖执行上下文传播。
             # 它只更新宿主 progress registry（供宿主自己的进度条/合并态用），**不发** legacy "progress"
             # 事件 ⇒ 自家状态栏面板看不到；面板靠下一行的自有通道（缘由详 _广播进度 docstring）。
+            # 3.1(98)：事件信息（run/stage/segment/...）仅走自有通道——宿主 set_progress 无 extra 接口。
             api.execution.set_progress(当前, 总数, node_id=node_id)
-            _广播进度(node_id, 当前, 总数)
+            _广播进度(node_id, 当前, 总数, 事件信息)
 
         images, audio, report = 执行时间轴(
             时间轴数据, 全局参数, 模型输入, node_id, 媒体根(), 进度回调=进度)

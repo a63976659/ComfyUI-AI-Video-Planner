@@ -1,0 +1,35 @@
+{
+  "base_url": "https://api.moonshot.cn/v1",
+  "model": "kimi-k3",
+  "api_key": "sk-K4LlqAfo5rFETmX9p8a1PBY6Ewi2lKTnf1Gdu3G6FCrstRpF",
+  "temperature": 0.7,
+  "max_tokens": 4096,
+  "timeout": 600,
+  "verify_ssl": true,
+  "api_models": [
+    {
+      "id": "Kimi-K3",
+      "name": "Kimi-K3",
+      "base_url": "https://api.moonshot.cn/v1",
+      "model": "kimi-k3",
+      "builtin": true,
+      "api_key": "sk-K4LlqAfo5rFETmX9p8a1PBY6Ewi2lKTnf1Gdu3G6FCrstRpF"
+    },
+    {
+      "id": "Qwen3.8",
+      "name": "Qwen3.8",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3.8-flash",
+      "builtin": true,
+      "api_key": "sk-ws-H.PMRRLRP.bIwA.MEQCIBVl5aOIZfDf3AAFkZ1TfsVp_QP00Wz1mZW7x_Hn8AVhAiAKsIJ_fm40NXOCk429wPAo7Fgi_9SZkk1jOmR-FD847Q"
+    },
+    {
+      "id": "GLM-5.3-Flash",
+      "name": "GLM-5.3-Flash",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "model": "glm-5.3-flash",
+      "builtin": true,
+      "api_key": ""
+    }
+  ]
+}

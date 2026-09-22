@@ -14,7 +14,7 @@
 
 const 选项接口 = "/lvp/preset/options";
 const 无 = "（无）";
-const 控件样式 = "background:#1c1c1c;color:#ddd;border:1px solid #444;border-radius:3px;max-width:132px";
+const 控件样式 = "background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:3px;max-width:132px";
 // 预设正文来自磁盘文件，可能是 CRLF；widget 里存的与前端比对用的统一按 LF 归一，
 // 否则「写回 → 回填」这一圈会因为行尾差异匹配不上、选中项莫名跳回（无）。
 const 归一 = (t) => (t ?? "").replace(/\r\n/g, "\n");

@@ -66,7 +66,7 @@ function 显示名(标签) {
     return m ? `${标签到中文[m[1]]}${m[2]}` : (标签 || "").replace(/[<>]/g, "");
 }
 
-export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分辨率变更, 百万像素变更, 全局提示词变更, 取节点, 全刷 }) {
+export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分辨率变更, 百万像素变更, 全局提示词变更, 取节点, 全刷, 应用规划 }) {
     const 盒 = document.createElement("div");
     盒.className = "lvp-提示词";
     const 编辑区 = document.createElement("div");
@@ -92,7 +92,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     工具行.appendChild(审查按钮);
 
     // @ 按钮后：输出分辨率下拉 + 百万像素数值（与参考节点前端同款，编辑节点同名 widget）
-    const 控件样式 = "background:#1c1c1c;color:#ddd;border:1px solid #444;border-radius:3px";
+    const 控件样式 = "background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:3px";
     const 分辨率组 = document.createElement("label");
     分辨率组.style.cssText = "display:flex;align-items:center;gap:4px;margin-left:6px";
     分辨率组.textContent = "输出分辨率";
@@ -116,9 +116,9 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     const 百万像素滑 = document.createElement("input");
     百万像素滑.type = "range";
     百万像素滑.min = "0.1"; 百万像素滑.max = "4"; 百万像素滑.step = "0.1";
-    百万像素滑.style.cssText = "width:110px;accent-color:#4a9eff";
+    百万像素滑.style.cssText = "width:110px;accent-color:var(--p-primary-color,#4a9eff)";
     const 百万像素值 = document.createElement("span");
-    百万像素值.style.cssText = "min-width:30px;text-align:right;color:#ddd";
+    百万像素值.style.cssText = "min-width:30px;text-align:right;color:var(--fg-color,#ddd)";
     function 刷新百万像素读数() { 百万像素值.textContent = Number(百万像素滑.value).toFixed(1); }
     百万像素滑.oninput = () => { 刷新百万像素读数(); 百万像素变更?.(parseFloat(百万像素滑.value)); };
     百万像素组.append(百万像素滑, 百万像素值);

@@ -6,19 +6,25 @@
 //   全刷()    → 加载后调用，触发 状态栏面板.回填() + 时间轴面板.渲染()
 //
 // 后端契约：GET /lvp/plan/list、GET /lvp/plan/load?name=X、POST /lvp/plan/save
-//   加载返回 {数据, 缺失素材}：缺失素材是被服务端过滤掉的、已不在媒体池的参考素材文件名，
-//   前端 toast 提示后正常应用（不阻断加载）。
+//   加载返回 {数据, 缺失素材, 缺草稿, 格式版本, 修订}：
+//   · 缺失素材＝已不在媒体池的参考素材文件名，服务端**保留原引用不剔除**
+//     （refs 位置即 <Picture N> 标签，压缩会使其余素材前移错指），仅登记供 toast；加载不阻断，
+//     真正拦截在执行前（采样前阻止引用缺失素材的可运行段）。
+//   · 缺草稿＝该计划未含有效 剪辑草稿（旧版 v1 或空草稿）：确认加载后清空节点上不相干的旧草稿
+//     并恢复默认表单，**不从执行 全局提示词 伪造 brief**；同时向用户明确提示。
+//   · 旧数据（v1 段无 segment_id）加载时就地补齐稳定 segment_id（A3），后续保存固定该 id。
+//   · 格式版本与修订号分离（schema vs 编辑轮次）；高于当前支持的未来版本后端直接 400 拒绝。
 //
 // 复用 ComfyUI 原生对话框（extensionManager.dialog.prompt/confirm，Vue 风格 + Promise），
 // 与 提示词编辑器.js 的 弹确认() 同源；老版本 ComfyUI 无原生框时退回 window.prompt/confirm。
 import { app } from "../../../scripts/app.js";
-import { 真源, 取widget, 写值 } from "./桥接/节点桥.js";
+import { 真源, 取widget, 写值, 捕获节点快照, 提交节点快照, 分配段ID } from "./桥接/节点桥.js";
 
 const 列表接口 = "/lvp/plan/list";
 const 加载接口 = "/lvp/plan/load";
 const 保存接口 = "/lvp/plan/save";
 const 无 = "（加载）";
-const 控件样式 = "background:#1c1c1c;color:#ddd;border:1px solid #444;border-radius:3px;max-width:180px";
+const 控件样式 = "background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:3px;max-width:180px";
 // 与后端 计划路由.安全名 的 _非法名字符 + _名最长 逐字对齐（前端预校验一次给用户即时反馈，
 // 后端仍会二次校验，前端漏过的非法名不会写坏磁盘）。
 const 非法名字符 = /[\\/:*?"<>|\x00-\x1f]/;
@@ -122,6 +128,9 @@ export function 创建计划数据(容器, { 取节点, 全刷 }) {
             运行选择: 真源.读运行选择(node),
             时间轴: 真源.读时间轴(node),
             参考素材: 真源.读参考素材(node),
+            // 剪辑草稿 真源＝node.properties（隔离执行缓存，不入执行 widget/不入 prompt）；
+            //   随存档一并保存，下次加载完整往返（A2）。
+            剪辑草稿: 真源.读剪辑草稿(node),
         };
         for (const 名 of 直读widget名) {
             const v = 取widget(node, 名)?.value;
@@ -130,8 +139,10 @@ export function 创建计划数据(容器, { 取节点, 全刷 }) {
         return 数据;
     }
 
-    // 应用计划数据到节点：仅写字段存在的项（未来新增 widget 时老计划缺该字段 → 保持当前值不覆盖）
-    function 应数据(node, 数据) {
+    // 应用计划数据到节点：仅写字段存在的项（未来新增 widget 时老计划缺该字段 → 保持当前值不覆盖）。
+    // 例外：剪辑草稿——无论字段是否存在都要写（A2）：自带有效草稿则恢复，缺草稿（旧计划无草稿）
+    //   则写默认空草稿以**清除节点上不相干的旧 brief**，不从执行 prompt 伪造。
+    function 应数据(node, 数据, 缺草稿) {
         if (!数据 || typeof 数据 !== "object") return;
         if (数据.任务类型 != null) 真源.写任务类型(node, 数据.任务类型);
         if (数据.全局提示词 != null) 真源.写全局提示词(node, 数据.全局提示词);
@@ -142,6 +153,11 @@ export function 创建计划数据(容器, { 取节点, 全刷 }) {
         if (数据.运行选择 != null) 真源.写运行选择(node, 数据.运行选择);
         if (数据.时间轴 != null) 真源.写时间轴(node, 数据.时间轴);
         if (数据.参考素材 != null) 真源.写参考素材(node, 数据.参考素材);
+        // 剪辑草稿 总写：有效草稿→恢复（旧段缺 segment_id 则就地补齐，A3），否则→默认空草稿。
+        const 草 = 数据.剪辑草稿;
+        const 有效 = !缺草稿 && 草 && typeof 草 === "object" && (草.brief || 草.segments);
+        if (有效) 分配段ID(草.segments);
+        真源.写剪辑草稿(node, 有效 ? 草 : { brief: {}, segments: [] });
         for (const 名 of 直读widget名) {
             if (数据[名] != null) 写值(node, 名, 数据[名]);
         }
@@ -181,6 +197,10 @@ export function 创建计划数据(容器, { 取节点, 全刷 }) {
         if (!名) return;
         const node = 取节点?.();
         if (!node) { toast("请先在画布上创建/选中一个长视频规划师节点"); 加载sel.value = ""; return; }
+        // 跨 await（覆盖确认 + 网络）后目标节点可能已换绑/删除/重配/内容被编辑：先捕获节点快照，
+        // 提交时复核仍是同一目标才写回，过期回写一律丢弃（与填充/生成同源守卫，不另造状态系统）。
+        //   加载会同时写 时间轴数据（widget）与 剪辑草稿（properties），两者都纳入守卫。
+        const 快照 = 捕获节点快照(node, ["时间轴数据", "剪辑草稿"]);
         // 判断当前是否有数据（时间轴 segments 非空即视为"有数据"）；无数据直接加载不打扰用户
         const 当前 = 真源.读时间轴(node);
         const 段数 = Array.isArray(当前?.segments) ? 当前.segments.length : 0;
@@ -193,14 +213,15 @@ export function 创建计划数据(容器, { 取节点, 全刷 }) {
             const res = await fetch(加载接口 + "?name=" + encodeURIComponent(名));
             const data = await res.json();
             if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-            应数据(node, data?.数据);
+            // 目标仍是发起时的同一节点且时间轴/草稿未被并发改，才写回；否则丢弃过期回写并提示。
+            const 已提交 = 提交节点快照(快照, 取节点?.(), (目标) => 应数据(目标, data?.数据, data?.缺草稿));
+            if (!已提交) { toast("节点、时间轴或草稿已变化，计划未应用，请重试"); return; }
             全刷?.();   // 触发 状态栏面板.回填() + 时间轴面板.渲染()，让所有 UI 与新 widget 值对齐
             const 缺失 = Array.isArray(data?.缺失素材) ? data.缺失素材 : [];
-            if (缺失.length) {
-                toast(`已加载：${名}（跳过 ${缺失.length} 个缺失的参考素材：${缺失.join("、")}）`);
-            } else {
-                toast(`已加载：${名}`);
-            }
+            const 附注 = [];
+            if (缺失.length) 附注.push(`跳过 ${缺失.length} 个缺失的参考素材：${缺失.join("、")}`);
+            if (data?.缺草稿) 附注.push("该计划不含剪辑草稿，已清空草稿区并恢复默认表单（未从执行提示词伪造）");
+            toast(附注.length ? `已加载：${名}（${附注.join("；")}）` : `已加载：${名}`);
         } catch (e) {
             toast("加载失败：" + (e?.message || e));
         } finally {
