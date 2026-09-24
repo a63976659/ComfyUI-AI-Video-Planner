@@ -15,7 +15,8 @@ function 注入样式() {
       .lvp-类型选择{display:flex;flex-direction:column;gap:4px;align-items:stretch}
       .lvp-提示词{flex:1 1 200px;min-width:170px;display:flex;flex-direction:column}
       .lvp-编辑区{flex:1;min-height:44px;overflow-y:auto;padding:4px 6px;background:var(--comfy-input-bg,#1c1c1c);border:1px solid var(--border-color,#3a3a3a);border-radius:6px;white-space:pre-wrap}
-      .lvp-工具行{display:flex;flex-wrap:wrap;gap:4px;flex:0 0 auto;margin-bottom:3px}
+      .lvp-工具行{display:flex;gap:4px;flex:0 0 auto;min-width:0;overflow-x:auto;margin-bottom:3px}
+      .lvp-工具行>*{flex-shrink:0}
       .lvp-说明行{flex:0 0 auto;margin-top:3px;color:var(--p-text-muted-color,#8c8c8c);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .lvp-chip{display:inline-block;margin:0 2px;padding:0 6px;background:#3a5f8a;border-radius:8px;color:#cfe6ff}
       /* 装饰 chip：仅前端可读性标记（subject_definitions:/[Shot N] 等），不引用素材、不可点击；
@@ -25,20 +26,34 @@ function 注入样式() {
       .lvp-缩略媒{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
       .lvp-音标{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:33px;color:#9ec1e8;background:#1f2a33}
       .lvp-缩略 b{position:absolute;right:1px;top:1px;padding:0 3px;font-size:10px;line-height:14px;color:#fff;background:rgba(0,0,0,.6);border-radius:4px;cursor:pointer}
-      /* 参考区/右列均内容宽、组间 8px 紧凑排布；多余宽度全归中间提示词区（flex:1 独占） */
+      /* 参考区/右列均内容宽、组间 8px 紧凑排布；多余宽度全归中间提示词区（flex:1 独占）。
+   素材框左右内距 8px＝原 4px＋约 7px 滚动条预留位对称合并取整（2026-09-24 用户订正「框内间距有问题」：
+   原 scrollbar-gutter:stable 只在右侧留位，内容整体偏左、左右内距 5/12px 不对称）；
+   滚动条隐藏但 overflow:auto 保留，滚轮/触控板仍可框内滚动，框宽 83/223 不变、左右列 493/492 齐平不受影响 */
       .lvp-参考{flex:0 0 auto;display:flex;gap:8px;align-items:flex-start;overflow:auto}
       .lvp-参考组{display:flex;flex-direction:column;gap:4px}
       .lvp-参考头{display:flex;align-items:center;gap:4px;opacity:.9}
-      .lvp-九宫{display:grid;grid-template-columns:repeat(3,66px);gap:4px}
-      .lvp-竖列{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+      .lvp-素材组{flex:0 0 auto}
+      .lvp-素材组>.lvp-参考头{justify-content:center;min-height:20px;white-space:nowrap}
+      .lvp-素材框{display:grid;grid-template-columns:66px;grid-template-rows:repeat(3,66px);grid-auto-rows:66px;box-sizing:content-box;width:max-content;height:206px;overflow:auto;scrollbar-width:none;gap:4px;padding:4px 8px;border:1px solid var(--border-color,#3a3a3a);border-radius:6px;background:var(--comfy-menu-bg,#2b2b2b);flex:0 0 auto}
+      .lvp-素材框::-webkit-scrollbar{width:0;height:0}
+      .lvp-素材框.lvp-九宫{grid-template-columns:repeat(3,66px)}
+      .lvp-素材框>.lvp-缩略{box-sizing:border-box}
+      .lvp-素材框>.lvp-素材添加{align-items:center;justify-content:center;padding:0;appearance:none;color:var(--p-primary-color,#4a9eff);font:32px/1 system-ui;cursor:pointer}
+      .lvp-素材框>.lvp-素材添加:hover{border-color:var(--p-primary-color,#4a9eff)}
+      .lvp-素材框>.lvp-素材添加:focus-visible{outline:2px solid var(--p-primary-color,#4a9eff);outline-offset:1px}
       .lvp-右列{display:flex;flex-direction:row;gap:8px;align-items:flex-start;flex:0 0 auto;overflow:auto}
-      /* 首尾帧水平双列：文字标在上、下拉在下、选图后预览缩略图垫底 */
+      /* 首尾帧水平双列：文字标在上、下拉在下、选图后预览缩略图垫底。
+         框宽 120px＝右列总宽与左列参考区（493px）齐平的口径：类型选择108＋间隙8＋3框×120＋框间2×8＝492，
+         改动帧框宽度会破坏左右对齐（浏览器实测，2026-09-24）。 */
       .lvp-首尾帧{display:flex;flex-direction:row;gap:8px;flex:0 0 auto;align-items:flex-start}
       .lvp-帧框{display:flex;flex-direction:column;gap:3px;flex:0 0 auto}
       .lvp-帧标{color:var(--fg-color,#ccc)}
-      .lvp-帧选{width:150px;background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:3px;padding:2px 4px;font:11px system-ui}
-      .lvp-帧预览{width:66px;height:66px;object-fit:cover;display:block;border:1px solid var(--border-color,#3a3a3a);border-radius:6px;background:var(--comfy-input-bg,#1a1a1a)}
+      .lvp-帧选{width:120px;background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:3px;padding:2px 4px;font:11px system-ui}
+      .lvp-帧预览{width:120px;height:120px;box-sizing:border-box;object-fit:cover;display:block;border:1px solid var(--border-color,#3a3a3a);border-radius:6px;background:var(--comfy-input-bg,#1a1a1a)}
       .lvp-帧预览[hidden]{display:none}
+      .lvp-中间帧位置{display:block;box-sizing:border-box;width:120px;margin-top:3px;background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:3px;padding:2px 4px;font:11px system-ui}
+      .lvp-中间帧位置:invalid{border-color:var(--p-red-400,#e07070)}
       .lvp-弹层{position:fixed;z-index:9999;max-height:200px;overflow:auto;background:var(--comfy-menu-secondary-bg,#262626);border:1px solid var(--border-color,#444);border-radius:6px}
       .lvp-弹层 div{padding:4px 10px;cursor:pointer}
       .lvp-弹层 div:hover{background:#3a5f8a}`;
@@ -51,11 +66,11 @@ function 注入样式() {
 //   状态          → 状态桥（读「选中段」）
 //   刷卡(i)       → 时间轴局部刷新第 i 段卡
 //   渲染时间轴()  → 时间轴整树重建
-//   全刷()        → 框架层全量同步（钳选中段 + 回填两页 + 时间轴重建）
+//   计划已加载/取规划编辑状态 → 透传计划组件的恢复与覆盖保护
 //   应用规划(segments) → 框架层公共动作（覆盖确认 → 写时间轴 → 全刷）
 export function 创建编辑页面板(编辑页, 上下文) {
     注入样式();
-    const { 取节点, 状态, 刷卡, 渲染时间轴, 全刷, 应用规划 } = 上下文;
+    const { 取节点, 状态, 刷卡, 渲染时间轴, 计划已加载, 取规划编辑状态, 应用规划 } = 上下文;
 
     // ---- 段级素材读写辅助 ----
     // 编辑本段的图片/音频/视频候选：缺键逐槽补全局，不套用其他段的共用覆盖。
@@ -91,6 +106,7 @@ export function 创建编辑页面板(编辑页, 上下文) {
         const 被移除 = 旧候选.filter(名 => 名 && !refs.图片.includes(名));
         if (被移除.includes(refs.首帧)) delete refs.首帧;
         if (被移除.includes(refs.尾帧)) delete refs.尾帧;
+        if (被移除.includes(refs.中间帧)) { delete refs.中间帧; delete refs.中间帧位置; }
         段组[i].refs = refs;
         真源.写时间轴(节点, { segments: 段组 });
         // 同步全局素材池，供缺键段回退及显式计划保存读取。
@@ -134,8 +150,7 @@ export function 创建编辑页面板(编辑页, 上下文) {
         真源.写参考共用(节点, !!v);
     }
 
-    // 布局：左=参考文件区（四组按宽度分配铺满），中=提示词编辑区（撑满状态栏高度），
-    // 右列=任务类型竖排+首尾帧（水平双列、选图后带预览）。
+    // 布局：左=参考文件区，中=提示词编辑区，右=任务类型及首尾帧/中间帧。
     const 参考区 = 创建参考文件区(编辑页, {
         // 上传跨 await 回写守卫：宿主提供发起时快照捕获器（删/拖 等同步动作无快照→本函数内即时捕获）；
         // 异步上传传入发起时快照 → 用 提交节点快照 复核「节点身份+时间轴版本+节点代数」，不过 → 拒绝。
@@ -157,9 +172,9 @@ export function 创建编辑页面板(编辑页, 上下文) {
         百万像素变更: (v) => { const 节点 = 取节点(); if (节点 && Number.isFinite(v)) 真源.写百万像素(节点, v); },
         // 画风/预设 两个下拉拼出的全局前缀 → 写回节点「全局提示词」（节点上已隐藏）
         全局提示词变更: (文本) => { const 节点 = 取节点(); if (节点) 真源.写全局提示词(节点, 文本); },
-        // 计划数据组件需要直接读写当前节点的全量 widget，把 getter + 全刷回调递下去
         取节点: () => 取节点(),
-        全刷: () => 全刷(),
+        计划已加载,
+        取规划编辑状态,
         应用规划: (segments) => 应用规划(segments),   // 新增（D7）
     });
     const 右列 = document.createElement("div");
@@ -176,10 +191,39 @@ export function 创建编辑页面板(编辑页, 上下文) {
     右列.appendChild(首尾帧区);
     const 首帧框 = 建帧下拉("首帧", (名) => 写当前段帧("首帧", 名));
     const 尾帧框 = 建帧下拉("尾帧", (名) => 写当前段帧("尾帧", 名));
-    首尾帧区.append(首帧框.盒, 尾帧框.盒);
+    const 中间帧框 = 建帧下拉("中间帧（可选）", (名) => {
+        写当前段帧("中间帧", 名);
+        刷新首尾帧选项();
+    });
+    中间帧框.sel.setAttribute("aria-label", "中间帧（可选）");
+    中间帧框.预览.alt = "中间帧预览";
+    const 位置标 = document.createElement("label");
+    位置标.className = "lvp-帧标";
+    位置标.textContent = "段内位置（%）";
+    const 位置入 = document.createElement("input");
+    位置入.className = "lvp-中间帧位置";
+    位置入.type = "number"; 位置入.min = "0"; 位置入.max = "100"; 位置入.step = "any";
+    位置入.setAttribute("aria-label", "中间帧段内位置（%）");
+    位置入.title = "大于0%且小于100%；随段长变化，实际生成取最近内部帧";
+    位置标.appendChild(位置入);
+    中间帧框.盒.appendChild(位置标);
+    位置入.onchange = () => {
+        const 百分比 = Number(位置入.value);
+        const 合法 = 位置入.value.trim() !== "" && Number.isFinite(百分比) && 百分比 > 0 && 百分比 < 100;
+        位置入.setCustomValidity(合法 ? "" : "中间帧位置须大于0%且小于100%");
+        if (!合法) { 位置入.reportValidity?.(); return; }
+        const 节点 = 取节点();
+        if (!节点) return;
+        const 段组 = 真源.读时间轴(节点).segments || [];
+        const 段 = 段组[状态.取("选中段")];
+        if (!段?.refs?.中间帧) return;
+        段.refs = { ...段.refs, 中间帧位置: 百分比 / 100 };
+        真源.写时间轴(节点, { segments: 段组 });
+    };
+    首尾帧区.append(首帧框.盒, 尾帧框.盒, 中间帧框.盒);
 
     function 建帧下拉(名, 变更) {
-        // 竖向三段：文字标在上、下拉在其下、选图后预览缩略图垫底（与参考缩略图同 66px）。
+        // 竖向三段：文字标在上、下拉在其下、选图后带等宽正方形预览。
         const 盒 = document.createElement("div");
         盒.className = "lvp-帧框";
         const 标 = document.createElement("span");
@@ -214,7 +258,11 @@ export function 创建编辑页面板(编辑页, 上下文) {
         const 段组 = 已有段组 || 真源.读时间轴(取节点()).segments || [];
         const 图片 = 读当前段素材(段组).图片;
         const refs = 段组[状态.取("选中段")]?.refs || {};
-        for (const [键, 框] of [["首帧", 首帧框], ["尾帧", 尾帧框]]) {
+        位置入.disabled = !refs.中间帧;
+        const 比例 = refs.中间帧位置 === undefined ? 0.5 : refs.中间帧位置;
+        位置入.value = Number.isFinite(比例) ? String(Number((比例 * 100).toFixed(9))) : "";
+        位置入.setCustomValidity(refs.中间帧 && (!Number.isFinite(比例) || 比例 <= 0 || 比例 >= 1) ? "中间帧位置须大于0%且小于100%" : "");
+        for (const [键, 框] of [["首帧", 首帧框], ["尾帧", 尾帧框], ["中间帧", 中间帧框]]) {
             const 当前 = refs[键] || "";
             // 独立预设帧不必属于图片槽：仅给对应下拉补选项，不修改候选池或节点数据。
             const 候选 = 当前 && !图片.includes(当前) ? [...图片, 当前] : 图片;
@@ -241,6 +289,10 @@ export function 创建编辑页面板(编辑页, 上下文) {
         if (!段组[i]) return;
         const refs = { ...(段组[i].refs || {}) };
         if (名) refs[键] = 名; else delete refs[键];
+        if (键 === "中间帧") {
+            if (!名) delete refs.中间帧位置;
+            else if (refs.中间帧位置 === undefined) refs.中间帧位置 = 0.5;
+        }
         段组[i].refs = refs;
         真源.写时间轴(节点, { segments: 段组 });
         刷卡(i);   // 通知时间轴局部刷新该段卡的首帧缩略图
@@ -253,6 +305,7 @@ export function 创建编辑页面板(编辑页, 上下文) {
         // 始终占位，提示词输入框宽度与任务类型按钮位置恒定不动。
         首尾帧区.style.visibility = (码 === "i2v" || 码 === "fl2v") ? "visible" : "hidden";
         尾帧框.盒.style.visibility = (码 === "fl2v") ? "visible" : "hidden";
+        中间帧框.盒.style.visibility = (码 === "fl2v") ? "visible" : "hidden";
         // 参考区仅 t2v 隐藏（纯文生无需参考）；i2v/fl2v 也要显示——上传首/尾帧候选图
         参考区.盒.style.visibility = (码 === "t2v") ? "hidden" : "visible";
         // 「全段共用」开关只在 参考生视频家族(r2v/v2v/rv2v) 显示：这几类每段吃参考素材，

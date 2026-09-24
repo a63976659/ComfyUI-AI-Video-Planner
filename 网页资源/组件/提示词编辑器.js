@@ -66,7 +66,7 @@ function 显示名(标签) {
     return m ? `${标签到中文[m[1]]}${m[2]}` : (标签 || "").replace(/[<>]/g, "");
 }
 
-export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分辨率变更, 百万像素变更, 全局提示词变更, 取节点, 全刷, 应用规划 }) {
+export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分辨率变更, 百万像素变更, 全局提示词变更, 取节点, 计划已加载, 取规划编辑状态, 应用规划 }) {
     const 盒 = document.createElement("div");
     盒.className = "lvp-提示词";
     const 编辑区 = document.createElement("div");
@@ -79,7 +79,13 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     const at按钮 = document.createElement("button");
     at按钮.className = "lvp-胶囊"; at按钮.type = "button";
     at按钮.textContent = "@"; at按钮.title = "插入参考素材标签";
-    at按钮.onclick = () => { 编辑区.focus(); 弹参考列表(at按钮.getBoundingClientRect()); };
+    // toggle：弹层开着再点 @ 直接关闭。此前是 关弹层+重开＝看起来没关；且 编辑区.focus() 让焦点
+    // 常驻编辑区，点空白处 blur 永不触发 → 「不选条目弹层不消失」。外点关闭见 弹参考列表 的 外点 监听。
+    at按钮.onclick = () => {
+        if (弹层) { 关弹层(); return; }
+        编辑区.focus();
+        弹参考列表(at按钮.getBoundingClientRect());
+    };
     工具行.appendChild(at按钮);
 
     // 「审查标签」按钮（@ 右侧）：一键审查没有对应上传素材的悬空标签（如 <Video 1> 但未传视频），
@@ -126,12 +132,10 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     工具行.append(分辨率组, 百万像素组);
 
     // 百万像素右边：画风 + 预设 两个下拉（拼接写回节点「全局提示词」widget，该 widget
-    // 在节点上已隐藏）。工具行因此有 6 组控件，窄屏靠 .lvp-工具行 的 flex-wrap 换行兜住。
+    // 在节点上已隐藏）。工具行因此有 6 组控件，窄屏靠 .lvp-工具行 的横向滚动兜住（不换行、不吞高度）。
     const 画风预设 = 创建画风预设选择(工具行, { 变更: 全局提示词变更 });
 
-    // 计划数据（保存/加载）：放在工具行最右（组件内部用 margin-left:auto 推右）。需要 取节点
-    // 读写全量 widget，需要 全刷 在加载后一次性同步状态栏 + 时间轴 UI。
-    const 计划 = 创建计划数据(工具行, { 取节点, 全刷 });
+    const 计划 = 创建计划数据(工具行, { 取节点, 计划已加载, 取规划编辑状态 });
 
     // 编辑说明行：介绍 @ 用法等编辑方法
     const 说明行 = document.createElement("div");
@@ -141,7 +145,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     盒.append(工具行, 编辑区, 说明行);
     容器.appendChild(盒);
 
-    let 弹层 = null;
+    let 弹层 = null, 外点 = null;
 
     function 建chip(标签) {
         const span = document.createElement("span");
@@ -188,7 +192,11 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
         if (末 < s.length) 编辑区.appendChild(document.createTextNode(s.slice(末)));
     }
 
-    function 关弹层() { 弹层?.remove(); 弹层 = null; }
+    function 关弹层() {
+        弹层?.remove();
+        弹层 = null;
+        if (外点) { document.removeEventListener("mousedown", 外点, true); 外点 = null; }
+    }
 
     function 弹参考列表(锚rect) {
         关弹层();
@@ -217,6 +225,15 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
         document.body.appendChild(弹层);
         定位弹层(锚rect);
         弹层.style.visibility = "";   // 定位完成后显形，避免在错误位置闪一下
+        // 外点即关（mousedown 捕获比条目/按钮自身处理器先到，故用 contains 豁免两类目标）：
+        //   ·弹层内条目——不能抢在 项.onmousedown 插入 chip 前把层关掉；
+        //   ·@ 按钮——豁免后 click 才走 toggle；否则「关旧→click 判定已无关→重开」= 闪一下重开。
+        外点 = (e) => {
+            const 目 = e.target;
+            if (!弹层 || 弹层.contains(目) || at按钮.contains(目)) return;
+            关弹层();
+        };
+        document.addEventListener("mousedown", 外点, true);
     }
 
     // 视口感知定位（同 Floating UI 的 flip + size 思路）：弹层靠下时若下方放不下就翻到上方；
@@ -319,7 +336,15 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
         if (前.endsWith("@")) 弹参考列表(range.getBoundingClientRect());
         else 关弹层();
     });
-    编辑区.addEventListener("blur", () => setTimeout(关弹层, 150));
+    // blur（点 @ 按钮时 mousedown 会先触发一次）只作废**当时已存在**的那一层弹层：
+    // 记快照 待关，150ms 后仍还是同一层才关。否则短点 @ 时「blur 挂定时器 → click 开新弹层 →
+    // 定时器到点把新开的一起杀掉」= 弹层闪一下就散；慢点（>150ms）定时器先落空才正常。
+    // 点别处关闭的原行为不受影响：那种场景 blur 时弹层就是 待关，到点照常关。
+    编辑区.addEventListener("blur", () => {
+        const 待关 = 弹层;
+        if (!待关) return;
+        setTimeout(() => { if (弹层 === 待关) 关弹层(); }, 150);
+    });
     编辑区.addEventListener("paste", (e) => {
         e.preventDefault();
         const 文本 = (e.clipboardData || window.clipboardData).getData("text");

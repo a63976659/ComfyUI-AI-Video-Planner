@@ -6,7 +6,7 @@
 //       绑定节点/展开/折叠/回填/全刷/设进度/设状态，以及 `创建状态栏面板` 这个对外入口。
 //   编辑页面板.js：Tab「提示词编辑」页——参考区 + 提示词编辑器 + 右列（任务胶囊 + 首尾帧）、
 //       刷新显隐、段级素材/共用/提示词/任务/帧 的读写。
-//   规划页面板.js：Tab「AI规划」页——brief 表单（11 字段两列网格）+ 模型下拉 + 生成按钮 +
+//   规划页面板.js：Tab「AI规划」页——brief 表单（12 字段两列网格，行序见 09 §1.3）+ 模型下拉 + 生成按钮 +
 //       段级规划字段（标题/结构/字幕，「结构」UI 标签对应数据键 职能）、拉规划枚举 / 拉模型清单。
 //
 // 两页通过本文件注入的「上下文」访问共享态（取节点/状态/刷卡/渲染时间轴/全刷/应用规划/弹确认），
@@ -35,8 +35,14 @@ function 注入样式() {
       .lvp-状态栏{display:flex;flex-direction:column;font:11px system-ui;color:var(--fg-color,#ddd)}
       .lvp-把手{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 10px;cursor:pointer;user-select:none;background:var(--comfy-menu-bg,#2b2b2b);border-radius:8px}
       /* 宿主底栏是 grid 的 auto 行（高度＝内容高）：既不能用 height:100%（父级无确定高度会退化 auto），
-         也不能完全放开（段卡一多底栏就吃掉画布），故按视口比例夹取。 */
-      .lvp-主体{display:none;padding:0;background:var(--comfy-menu-secondary-bg,#232323);border-top:1px solid var(--border-color,#3a3a3a);height:clamp(180px,32vh,420px);overflow:hidden}
+         也不能完全放开（段卡一多底栏就吃掉画布），故按视口比例夹取。
+         下限 195px＝AI规划页左列 brief 表单在 11px 字号下的实测内容高（180 时末两格仍差 3px 会画到圆角框外，
+         左列已无滚动兜底；用户明确拒绝"把字缩到 10px 换矮面板"，故改为抬下限）。
+         上限 260px＝提示词编辑页三列的实测内容高：左列参考区素材框固定 206 内容＋8 内距＋2 边框＝216，加组头 20
+         ＋间隙 4＝240（绑定真实段数据时实测 246.3），再加页面上下内距 6＋6 与主体上边框 1＝259.3。左右两列都是
+         内容定高、顶端对齐（只有中间提示词列带 flex:1 吸收器），面板再高也只在这两列底部多出空白带，故按内容封顶；
+         再低 1px 参考区就要内滚（滚动条方案已被用户否掉）。 */
+      .lvp-主体{display:none;padding:0;background:var(--comfy-menu-secondary-bg,#232323);border-top:1px solid var(--border-color,#3a3a3a);height:clamp(195px,26vh,260px);overflow:hidden}
       .lvp-主体.展开{display:flex;flex-direction:column}
       .lvp-把手标签{display:flex;align-items:center;gap:2px;flex:1}
       .lvp-把手标签 .lvp-tab{flex:1;text-align:center;padding:2px 14px;cursor:pointer;border:none;background:transparent;color:var(--p-text-muted-color,#8c8c8c);font:11px system-ui;border-radius:6px;position:relative;overflow:hidden;transition:background .15s,color .15s}
@@ -138,6 +144,8 @@ export function 创建状态栏面板(底栏) {
         刷卡: (i) => 时间轴刷卡?.(i),
         渲染时间轴: () => 时间轴渲染?.(),
         全刷: () => 全刷(),
+        计划已加载: () => 计划已加载(),
+        取规划编辑状态: () => 规划页面板.取编辑状态(),
         应用规划: (segments) => 应用规划(segments),
         弹确认: (标题, 消息) => 弹确认(标题, 消息),   // 剪辑时间轴 填充节点/生成失败 复用同一确认框
     };
@@ -162,6 +170,9 @@ export function 创建状态栏面板(底栏) {
             }
             const 已提交 = 提交节点快照(快照, 取存活节点(), (目标) => {
                 真源.写时间轴(目标, { segments: 待填 });
+                // 新段缺少素材字段时会回退全局池，不能继承旧时间轴的素材与共用状态。
+                真源.写参考素材(目标, { 图片: [], 音频: [], 视频: [] });
+                真源.写参考共用(目标, false);
                 // 运行选择（旧索引覆盖表）优先于段内 run；换全新时间轴后旧表指向的是已不存在的段，
                 // 必须同快照原子清空，否则实际运行段与新界面不一致（取消/快照失效时回调不执行，两值都不动）。
                 真源.写运行选择(目标, {});
@@ -239,8 +250,15 @@ export function 创建状态栏面板(底栏) {
     }
     function 设状态(文本) { 状态条.textContent = 文本; }
 
-    // 全刷：计划数据加载后一次性同步所有 UI。先把 选中段 钳到新时间轴范围内（避免加载 3 段计划
-    // 时 选中段=7 造成提示词区空白），再走 回填() 刷状态栏各组件，最后调时间轴的 渲染() 整树重建。
+    function 计划已加载() {
+        规划页面板.恢复brief(当前节点, true);
+        const 段数 = 真源.读剪辑草稿(当前节点).segments?.length || 0;
+        状态.设("剪辑选中段", Math.max(0, Math.min(状态.取("剪辑选中段"), 段数 - 1)));
+        规划页面板.重渲染();
+        全刷();
+    }
+
+    // 普通刷新不恢复 brief，避免覆盖尚未提交的表单编辑。
     function 全刷() {
         if (当前节点) {
             const tl = 真源.读时间轴(当前节点);

@@ -101,7 +101,7 @@ class H3导演台(io.ComfyNode):
                 # 尾帧锚定 同样置于 inputs 末尾（向后兼容铁律，见上 参考共用 注释）：旧存档 widgets_values
                 #   不含本 widget → 载入时拿默认 False（尾帧锚定关闭）。与 execute 签名末位参数一致。
                 io.Boolean.Input("尾帧锚定", default=False,
-                                 tooltip="开启：把上一段的尾帧/尾音频锚入下一段，实现段间镜头/声音平滑过渡（等效官方 MiniMaxH3AddGuide，但直接传 latent、不经解码再编码，故更快也更保真）；关闭：各段独立生成、不做段间连续。默认关闭",
+                                 tooltip="开启：把上一段的尾帧画面与约 1 秒尾音频作为续拍条件锚入下一段（等效官方 MiniMaxH3AddGuide，但直接传 latent、不经解码再编码，故更快也更保真），接缝零重叠硬切、只对续拍段开头做低频色光衔接（不混叠两段画面）；关闭：各段独立生成、接缝硬切、不做任何过渡处理。默认关闭",
                                  extra_dict={"hidden": True}),   # 节点上不显示，经时间轴工具条「尾帧锚定」开关编辑
             ],
             outputs=[

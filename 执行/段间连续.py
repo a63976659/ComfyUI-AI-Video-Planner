@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
 """段间连续性：规范锚帧数/裁前缀/crossfade 权重为纯函数；上下文钉入直接传 latent（方案 B）。"""
+import math
+from numbers import Integral
+
 import torch
 
 默认上下文帧数 = 22
+默认音频上下文帧数 = 24
+续拍算法标识 = "native_end_aligned_v1"
 
 
 def 规范锚帧数(n: int) -> int:
@@ -158,23 +163,7 @@ class 流式拼接:
                 f"不符通常意味着段缓存里的 帧数 与 latent 不自洽（试清缓存目录重跑）")
 
 
-# ---------- 段间锚定：直接传 latent（方案 B，取代官方 MiniMaxH3AddGuide 往返） ----------
-#
-# 官方链路：上段 images 尾帧 → vae.encode → keyframe["latent"]；尾音频 → audio_vae.encode
-# → keyframe["audio_latent"]。方案 B 直接切 KSampler 输出 latent 的尾部 token 当 keyframe，
-# 省掉「VAE decode 出像素 → 再 VAE encode 回 latent」这一整个往返：16GB 卡上它正是显存
-# 乒乓的重灾区（1.0MP@16s 实测 AV 解码 52s → 839s），顺带免掉一次编解码量化损失。
-#
-# 与官方等价的依据（comfy/ldm/minimax/model.py）：
-#   1. FRAME_PER_TOKEN = (1,4,4,4,4)（周期 5、和 17）→ video_latent_t(17k+5) = 5k+2，
-#      即 T_lat ≡ 2 (mod 5) 恒成立。故从尾部切 5m+2 个 token，其**绝对**下标 mod 5 的序列
-#      恰为 0,1,2,3,4,0,1…，与 PackedLayout 里 _video_t_grid(vt, origin) 按 k=0.. 生成的
-#      _video_t_spans 完全同相位 → 时间栅格与官方 vae.encode 路径逐值一致。
-#   2. 空间维：PackedLayout 用**目标画布**的 frame_rows 给 keyframe 计行数
-#      （n = vt * frame_rows），故 keyframe latent 的 H/W 必须等于本段画布；不符会在模型
-#      内部炸成难定位的形状错，钉入上下文_from_latent 前移为显式 ValueError。
-#   3. 音频侧无 5-token 周期（每 latent 帧推进 1.0），token 数按 FRAME_RESCALE=5/3 由
-#      **像素帧数**换算：round(锚帧数 * 40/24)。⚠️ 不是「视频 token 数 × 5/3」。
+# ---------- 段间锚定：原生视频整块与独立音频尾窗 ----------
 
 _FRAME_PER_TOKEN = (1, 4, 4, 4, 4)   # 官方 comfy/ldm/minimax/model.py:30
 _FRAME_RESCALE = 5.0 / 3.0           # 官方 FRAME_RESCALE = AUDIO_LATENT_FPS(40) / FPS(24)
@@ -212,95 +201,215 @@ def _latent_t_转帧数(T_lat: int) -> int:
     return sum(_FRAME_PER_TOKEN[i % 5] for i in range(max(0, int(T_lat))))
 
 
+def _校验视频latent(视频, 描述, 批次=None):
+    if (not isinstance(视频, torch.Tensor) or 视频.ndim != 5 or 视频.shape[1] != 24
+            or min(视频.shape) <= 0 or (批次 is not None and 视频.shape[0] != 批次)):
+        raise ValueError(f"{描述}视频 latent 形状须为非空 [B,24,T,H,W]，且批次一致")
+
+
+def _校验音频latent(音频, 描述, 批次):
+    if (not isinstance(音频, torch.Tensor) or 音频.ndim != 4 or tuple(音频.shape[1:3]) != (32, 2)
+            or min(音频.shape) <= 0 or 音频.shape[0] != 批次):
+        raise ValueError(f"{描述}音频 latent 形状须为非空 [B,32,2,T]，且批次一致")
+
+
 def 取尾帧_latent(video_latent, audio_latent, 上下文帧数: int = 默认上下文帧数):
-    """从 KSampler 输出的 AV latent 里切出末尾 上下文帧数 像素帧对应的 latent，作下段锚素材。
-
-    入参：video_latent [B,24,T_lat,H_lat,W_lat]、audio_latent [B,32,2,T_audio]|None
-    返回：(尾帧_video, 尾帧_audio, 锚帧数)；上下文帧数<=0 或 video_latent 为 None → (None,None,0)。
-
-    锚帧数 = 规范锚帧数(上下文帧数)——与旧 images 路径逐字同口径（那边是
-    `规范锚帧数(上段尾帧.shape[0])`，而上段尾帧正是 min(上下文帧数, 段帧数) 帧），
-    供 裁前缀帧数 裁掉本段被锚定的重复前缀。本段比上下文还短时钳到本段全长，锚帧数
-    随之按 _latent_t_转帧数 回算，保证「切了多少 latent」与「裁掉多少帧」始终同源。
-    切片用 .clone()：返回值会被塞进下段 conditioning 并落进段缓存，不能是上游 latent 的视图
-    （视图会让整段 latent 无法回收，10 段就把方案 B 省下的显存全吃回去）。"""
+    """返回独立克隆的视频尾块、音频尾窗、实际锚帧数及相对锚起点的音频结束 tick。"""
     if int(上下文帧数) <= 0 or video_latent is None:
-        return None, None, 0
-    锚帧数 = 规范锚帧数(上下文帧数)
-    token数 = _帧数转token数(锚帧数)          # “锚帧数 帧占几个 token”，非 _video_latent_t（后者 <=5 帧恒返 2）
+        return None, None, 0, None
+    _校验视频latent(video_latent, "来源")
     T_lat = int(video_latent.shape[2])
-    if token数 > T_lat:                       # 本段比上下文还短 → 整段作锚
-        token数 = T_lat
-        锚帧数 = 规范锚帧数(_latent_t_转帧数(T_lat))
+    来源视频帧数 = _latent_t_转帧数(T_lat)
+    锚帧数 = 规范锚帧数(min(int(上下文帧数), 来源视频帧数))
+    token数 = _帧数转token数(锚帧数)
+    if (T_lat - token数) % len(_FRAME_PER_TOKEN) != 0:
+        raise ValueError("视频尾 token 源相位与锚时间网格不符，不能把覆盖 4 帧的 token 当作 1 帧")
+    锚帧数 = _latent_t_转帧数(token数)
     尾帧_video = video_latent[:, :, -token数:, :, :].clone()
 
-    尾帧_audio = None
+    尾帧_audio, 音频结束坐标 = None, None
     if audio_latent is not None:
-        音频_token数 = max(1, int(round(锚帧数 * _FRAME_RESCALE)))
-        音频_token数 = min(音频_token数, int(audio_latent.shape[-1]))   # 同官方 max_rt 钳制
+        _校验音频latent(audio_latent, "来源", video_latent.shape[0])
+        音频长 = int(audio_latent.shape[-1])
+        窗口 = round(默认音频上下文帧数 * _FRAME_RESCALE)
+        音频_token数 = min(窗口, 音频长)
+        视频结束坐标 = 来源视频帧数 * _FRAME_RESCALE
+        # 与宿主 temporal_shape 同序先除 24 再乘 40 取整，短音频也按完整长度推导可为负的 overhang。
+        期望音频长 = round(来源视频帧数 / 24 * 40)
+        if 音频长 >= 窗口 and 音频长 != 期望音频长:
+            raise ValueError("来源音频长度不在完整视频时间网格上，不能推断尾音频对齐坐标")
+        overhang = 期望音频长 - 视频结束坐标
         尾帧_audio = audio_latent[..., -音频_token数:].clone()
-    return 尾帧_video, 尾帧_audio, 锚帧数
+        音频结束坐标 = round(锚帧数 * _FRAME_RESCALE + overhang)
+    return 尾帧_video, 尾帧_audio, 锚帧数, 音频结束坐标
 
 
-def 钉入上下文_from_latent(positive, latent, 尾帧_video_latent, 尾帧_audio_latent, 锚帧数, frame_idx=0):
-    """把尾帧 latent 挂进 positive 的 minimax_keyframes（等价官方 MiniMaxH3AddGuide 的产出，
-    但跳过 vae.encode / _encode_ref_audio）。返回新 positive。
-
-    锚帧数 由调用方（执行时间轴）从 取尾帧_latent 取得后传入——段缓存指纹与实际锚定共用
-    同一个值，避免「指纹算一套、真锚另一套」的假命中。尾帧_video_latent 为 None → 原样返回。
-    latent 是本段 AV 空 latent，用于形态校验 + 取目标画布尺寸/总帧数/音频长度做越界与钳制
-    （四条守卫口径逐字对齐官方 nodes_minimax_h3.py:190-233）：
-      ① AV latent 形态（is_nested / 恰好 2 支 / 视频支 5 维 / 通道 24）；
-      ② 尾帧 latent 的 H/W 等于本段画布（PackedLayout 按**目标**画布的 frame_rows 给 keyframe
-         计行数，n = vt * frame_rows，尺寸不符会在模型内部炸成难定位的形状错）；
-      ③ frame_idx 负值按官方语义「从末尾数」解析，解析后越界则抛；
-      ④ 音频按**目标** T_audio 钳制（官方 max_rt），而非只按来源长度钳。
-    四条均在当前编排下不可达（latent 恒来自 H3 条件节点的 _empty_av_latent、frame_idx 恒 0、
-    目标与来源同时长），但它们是把「形状错在模型深处静默发生」前移成显式 ValueError 的唯一口子。"""
+def 钉入上下文_from_latent(positive, latent, 尾帧_video_latent, 尾帧_audio_latent, 锚帧数, frame_idx=0,
+                          *, 音频结束坐标=None):
+    """分别钉入整块视频和结束对齐的音频，真续拍只替换零帧画面且不修改输入条件。"""
     if 尾帧_video_latent is None:
         return positive
 
-    # 延迟 import：node_helpers 只在下方 conditioning_set_values 用到，而本函数首句就是无尾帧
-    # 的早返回——把它放在早返回之前，等于给「一次也不锚定」的常态路径平白挂上一个宿主依赖。
-    import node_helpers
-
-    samples = latent["samples"]
-    # ① 形态守卫：同官方 AddGuide L191。不放宽 is_nested/2 支：非 AV latent（如单视频管线的
-    #    {"samples": Tensor}）没有音频时间轴，下方的 max_rt 钳制无从算起，让它早报错比静默锚错好。
-    if (not getattr(samples, "is_nested", False) or len(samples.tensors) != 2
-            or samples.tensors[0].ndim != 5 or int(samples.tensors[0].shape[1]) != 24):
-        raise ValueError(
-            "段间锚定需要 MiniMax H3 的 AV latent（嵌套形态、恰好 video+audio 两支、"
-            "video 为 [B,24,T,H,W]）；实际 latent 形态不符，请确认它来自 H3 条件节点"
-            "（MiniMaxH3ImageToVideo / MiniMaxH3ReferenceToVideo）而非其他管线")
-    video, 目标音频 = samples.tensors
-    # ② 画布守卫
+    samples = latent.get("samples") if isinstance(latent, dict) else None
+    tensors = getattr(samples, "tensors", None)
+    if (not getattr(samples, "is_nested", False) or not isinstance(tensors, (list, tuple))
+            or len(tensors) != 2):
+        raise ValueError("段间锚定需要 MiniMax H3 的 AV latent（嵌套形态、恰好 video+audio 两支）")
+    video, 目标音频 = tensors
+    _校验视频latent(video, "AV latent 的")
+    _校验音频latent(目标音频, "AV latent 的", video.shape[0])
+    _校验视频latent(尾帧_video_latent, "尾帧", video.shape[0])
     if tuple(尾帧_video_latent.shape[3:]) != tuple(video.shape[3:]):
         raise ValueError(
             f"段间锚定的尾帧 latent 空间尺寸 {tuple(尾帧_video_latent.shape[3:])} 与本段画布 "
-            f"{tuple(video.shape[3:])} 不符；PackedLayout 按目标画布行数打包 keyframe，"
-            f"尺寸不符会在模型内部炸成难以定位的形状错误")
+            f"{tuple(video.shape[3:])} 不符")
+    if (not isinstance(锚帧数, Integral) or isinstance(锚帧数, bool) or 锚帧数 <= 0
+            or 规范锚帧数(锚帧数) != 锚帧数 or _latent_t_转帧数(尾帧_video_latent.shape[2]) != 锚帧数):
+        raise ValueError("锚帧数须为合法窗口并与完整视频尾块的实际帧数一致")
     总帧数 = _latent_t_转帧数(int(video.shape[2]))
-    # ③ frame_idx 解析 + 越界守卫（官方 L211-216 同式：负值从末尾数）
     锚位 = int(frame_idx) if int(frame_idx) >= 0 else 总帧数 + int(frame_idx)
     if 锚位 < 0 or 锚位 + int(锚帧数) > 总帧数:
         raise ValueError(
             f"锚定 {锚帧数} 帧于 frame_idx={int(frame_idx)}（解析为第 {锚位} 帧）超出本段 "
             f"{总帧数} 帧；请调小「上下文帧数」或加长本段时长")
 
-    keyframe = {"resolved_frame_index": 锚位, "latent": 尾帧_video_latent}
+    新锚 = [{"resolved_frame_index": 锚位, "latent": 尾帧_video_latent}]
     if 尾帧_audio_latent is not None:
-        # ④ 音频钳制：两条流共用一条时间轴（每像素帧 FRAME_RESCALE、每音频 latent 帧 1.0），
-        #    故本段音频轨从 锚位 起只剩 max_rt 个 token 可放（官方 L228-232 同式）。
-        #    int() 而非 math.floor：二者对 >=1 的值全同，而 <1 时一律走 raise 分支，不取到切片长度。
-        max_rt = int(目标音频.shape[-1] - _FRAME_RESCALE * 锚位)
+        _校验音频latent(尾帧_audio_latent, "尾帧", video.shape[0])
+        if (not isinstance(音频结束坐标, Integral) or isinstance(音频结束坐标, bool) or 音频结束坐标 <= 0):
+            raise ValueError("有尾帧音频时必须提供正整数音频结束坐标")
+        音频_token数 = int(尾帧_audio_latent.shape[-1])
+        音频起点 = (音频结束坐标 - 音频_token数) / _FRAME_RESCALE + 锚位
+        max_rt = math.floor(目标音频.shape[-1] - (音频结束坐标 - 音频_token数 + _FRAME_RESCALE * 锚位))
         if max_rt < 1:
-            raise ValueError(
-                f"frame_idx={int(frame_idx)}（解析为第 {锚位} 帧）已超出本段音频轨末尾，"
-                f"无法锚定尾帧音频")
-        if int(尾帧_audio_latent.shape[-1]) > max_rt:
+            raise ValueError(f"frame_idx={int(frame_idx)} 的尾音频起点已超出本段音频轨末尾，无法放入完整 token")
+        if 音频_token数 > max_rt:
             尾帧_audio_latent = 尾帧_audio_latent[..., :max_rt].clone()
-        keyframe["audio_latent"] = 尾帧_audio_latent
-    keyframes = list(positive[0][1].get("minimax_keyframes", []))
-    keyframes.append(keyframe)
-    return node_helpers.conditioning_set_values(positive, {"minimax_keyframes": keyframes})
+        新锚.append({"resolved_frame_index": 音频起点, "audio_latent": 尾帧_audio_latent})
+
+    新条件 = []
+    for 条件, 信息 in positive:
+        keyframes = []
+        for 原锚 in 信息.get("minimax_keyframes", []):
+            锚 = 原锚.copy()
+            if 锚位 == 0 and 锚.get("resolved_frame_index") == 0 and "latent" in 锚:
+                del 锚["latent"]
+                if set(锚) == {"resolved_frame_index"}:
+                    continue
+            keyframes.append(锚)
+        keyframes.extend(锚.copy() for 锚 in 新锚)
+        新条件.append([条件, {**信息, "minimax_keyframes": keyframes}])
+    return 新条件
+
+
+def _批量方框模糊(frames, kernel):
+    x = frames.detach().float().permute(0, 3, 1, 2)
+    pad = kernel // 2
+    x = torch.nn.functional.pad(x, (pad, pad, pad, pad), mode="reflect")
+    # 方框核可分离，避免 65×65 直接池化在 CPU 上重复求和。
+    x = torch.nn.functional.avg_pool2d(x, (1, kernel), stride=1)
+    x = torch.nn.functional.avg_pool2d(x, (kernel, 1), stride=1)
+    return x.permute(0, 2, 3, 1)
+
+
+@torch.no_grad()
+def 匹配开头色光(body, previous_last):
+    """原位调整最多十二帧的低频色光与亮度，不复制整段或重叠时间。"""
+    if len(body) == 0:
+        return body
+    n = min(12, len(body))
+    kernel = min(65, 2 * min(body.shape[1:3]) - 1)
+    guide_blur = _批量方框模糊(previous_last.unsqueeze(0), kernel)
+    opening_blur = _批量方框模糊(body[:n], kernel)
+    weights = body.new_tensor([0.70 * (1 - i / n) for i in range(n)], dtype=torch.float32).view(-1, 1, 1, 1)
+    body[:n] = (body[:n].float() + weights * (guide_blur - opening_blur)).clamp_(0, 1).to(body.dtype)
+    if len(body) < 3:
+        return body
+    n = min(12, len(body) - 1)
+    coeffs = body.new_tensor([0.299, 0.587, 0.114])
+    luma = (body[:n + 1].float() * coeffs).sum(dim=-1).mean(dim=(1, 2))
+    start = (previous_last.float() * coeffs).sum(dim=-1).mean()
+    end = luma[n]
+    if (abs(luma[0] - start) < 0.008 and abs(luma[1] - luma[0]) + abs(luma[2] - luma[1]) < 0.008
+            and abs(end - start) < 0.008):
+        return body
+    t = torch.arange(n, device=body.device, dtype=torch.float32) / n
+    delta = (start * (1 - t) + end * t - luma[:n]).clamp_(-0.10, 0.10)
+    delta = torch.where(delta.abs() < 1e-5, 0, delta).view(-1, 1, 1, 1)
+    body[:n] = (body[:n].float() + delta).clamp_(0, 1).to(body.dtype)
+    return body
+
+
+@torch.no_grad()
+def 验证宿主续拍条件(model_p):
+    """以 CPU 小条件验证当前补丁模型的续拍行为，不修改宿主或跨轮保留模型。"""
+    def 检查(成立, 描述):
+        if not 成立:
+            raise ValueError(描述)
+
+    def 坐标相等(实际, 期望):
+        检查(实际.shape == 期望.shape and torch.allclose(实际, 期望, rtol=0, atol=1e-9),
+             "PackedLayout 坐标不符")
+
+    try:
+        model = model_p.model
+        text = torch.zeros((1, 5, model.diffusion_model.hidden_size), device="cpu")
+        video = torch.zeros((1, 24, 7, 4, 4), device="cpu")
+        audio = torch.zeros((1, 32, 2, 40), device="cpu")
+        keyframes = [{"resolved_frame_index": 0, "latent": video},
+                     {"resolved_frame_index": -1.8, "audio_latent": audio}]
+        refs = [
+            {"kind": "audio", "ref_audio_t": 6,
+             "audio_latent": torch.zeros((1, 32, 2, 6), device="cpu")},
+            {"kind": "image", "latent_h": 4, "latent_w": 4,
+             "latent": torch.zeros((1, 24, 1, 4, 4), device="cpu")},
+            {"kind": "video_audio", "latent_t": 2, "latent_h": 4, "latent_w": 4, "ref_audio_t": 3,
+             "latent": torch.zeros((1, 24, 2, 4, 4), device="cpu"),
+             "audio_latent": torch.zeros((1, 32, 2, 3), device="cpu")},
+        ]
+        期望视频 = [video, refs[1]["latent"], refs[2]["latent"]]
+        期望音频 = [audio, refs[0]["audio_latent"], refs[2]["audio_latent"]]
+        out = model.extra_conds(cross_attn=text, device=torch.device("cpu"),
+                                latent_shapes=[(1, 24, 37, 4, 4), (1, 32, 2, 207)],
+                                minimax_keyframes=keyframes, minimax_refs=refs)
+        payload = out["minimax_payload"].cond
+        for 名, 期望 in (("cond_video_latents", 期望视频), ("cond_audio_latents", 期望音频)):
+            实际 = payload[名]
+            检查(len(实际) == len(期望) and all(a is b for a, b in zip(实际, 期望)),
+                 f"{名} 合并后身份或数量不符")
+        layout = payload["layout"]
+        期望段 = []
+        起点 = 0
+        for 名, 长度 in (("text", 5), ("cond", 28), ("cond_audio", 80), ("ref_audio", 12),
+                         ("ref_img", 4), ("ref_audio", 6), ("ref_img", 8), ("audio", 414), ("video", 148)):
+            期望段.append((起点, 起点 + 长度, 名))
+            起点 += 长度
+        检查(layout.segments == 期望段 and layout.seq_len == 起点, "PackedLayout 条件行数量或顺序不符")
+        检查(layout.position_ids.shape == (起点, 3), "PackedLayout 坐标形状不符")
+        for 模态, 名单 in (("audio", ("cond_audio", "ref_audio", "audio")),
+                           ("img", ("cond", "ref_img", "video"))):
+            选段 = [(a, b, k) for a, b, k in 期望段 if k in 名单]
+            位置 = torch.cat([torch.arange(a, b, device="cpu") for a, b, _ in 选段])
+            更新 = torch.cat([torch.full((b - a,), k in ("audio", "video"), dtype=torch.bool, device="cpu")
+                              for a, b, k in 选段])
+            检查(torch.equal(getattr(layout, 模态 + "_pos"), 位置)
+                 and torch.equal(getattr(layout, 模态 + "_update"), 更新), "PackedLayout 更新 mask 不符")
+        原点 = 5 + 6 + 1 + 25 / 3
+        网格 = torch.tensor([[0, 0], [0, 16], [16, 0], [16, 16]], dtype=torch.float64, device="cpu")
+        for a, b, 名 in 期望段:
+            if 名 not in ("cond", "cond_audio", "audio", "video"):
+                continue
+            坐标 = layout.position_ids[a:b]
+            if 名 in ("cond_audio", "audio"):
+                长度, 开始 = (40, -3) if 名 == "cond_audio" else (207, 0)
+                时间 = torch.arange(开始, 开始 + 长度, dtype=torch.float64, device="cpu").repeat(2)
+                空间 = torch.tensor([[0, 0]] * 长度 + [[0, 16]] * 长度, dtype=torch.float64, device="cpu")
+            else:
+                长度 = 7 if 名 == "cond" else 37
+                时间 = torch.tensor([sum(_FRAME_PER_TOKEN[i % 5] for i in range(t)) for t in range(长度)],
+                                    dtype=torch.float64, device="cpu").repeat_interleave(4) * _FRAME_RESCALE
+                空间 = 网格.repeat(长度, 1)
+            坐标相等(坐标[:, 0] - 原点, 时间)
+            坐标相等(坐标[:, 1:], 空间)
+    except Exception as exc:
+        raise ValueError(f"宿主续拍条件不兼容：{exc}；请检查其他插件补丁") from exc

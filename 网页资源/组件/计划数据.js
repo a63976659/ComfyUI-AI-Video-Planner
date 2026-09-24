@@ -3,7 +3,7 @@
 //
 // 组件契约：
 //   取节点()  → 当前绑定的长视频规划师节点（无绑定返回 null，保存/加载 toast 提示）
-//   全刷()    → 加载后调用，触发 状态栏面板.回填() + 时间轴面板.渲染()
+//   计划已加载() → 恢复规划表单与两条时间轴；取规划编辑状态() → 覆盖确认与表单并发保护
 //
 // 后端契约：GET /lvp/plan/list、GET /lvp/plan/load?name=X、POST /lvp/plan/save
 //   加载返回 {数据, 缺失素材, 缺草稿, 格式版本, 修订}：
@@ -66,16 +66,16 @@ function 校验名(名) {
     return 净;
 }
 
-export function 创建计划数据(容器, { 取节点, 全刷 }) {
+export function 创建计划数据(容器, { 取节点, 计划已加载, 取规划编辑状态 }) {
     const 组 = document.createElement("label");
-    // margin-left:auto 把整组推到工具行最右（工具行是 flex-wrap，窄屏换行后本组独占一行也保持右对齐）
+    // margin-left:auto 把整组推到工具行最右（工具行不换行；窄屏溢出时 auto 边距归零，本组紧随前组继续排）
     组.style.cssText = "display:flex;align-items:center;gap:4px;margin-left:auto";
     组.title = "把当前节点的全部参数与时间轴保存到 插件根/计划数据/<名>.json；下次一键加载复原";
     组.textContent = "计划数据";
 
     const 加载sel = document.createElement("select");
     加载sel.style.cssText = 控件样式;
-    加载sel.title = "选择已保存的计划加载到当前节点（当前时间轴非空时会二次确认覆盖）";
+    加载sel.title = "选择已保存的计划加载到当前节点（已有时间轴、剪辑草稿或规划表单内容时确认覆盖）";
 
     const 保存钮 = document.createElement("button");
     保存钮.className = "lvp-胶囊"; 保存钮.type = "button";
@@ -201,22 +201,26 @@ export function 创建计划数据(容器, { 取节点, 全刷 }) {
         // 提交时复核仍是同一目标才写回，过期回写一律丢弃（与填充/生成同源守卫，不另造状态系统）。
         //   加载会同时写 时间轴数据（widget）与 剪辑草稿（properties），两者都纳入守卫。
         const 快照 = 捕获节点快照(node, ["时间轴数据", "剪辑草稿"]);
-        // 判断当前是否有数据（时间轴 segments 非空即视为"有数据"）；无数据直接加载不打扰用户
+        const 编辑状态 = 取规划编辑状态?.();
         const 当前 = 真源.读时间轴(node);
         const 段数 = Array.isArray(当前?.segments) ? 当前.segments.length : 0;
-        if (段数 > 0) {
-            const ok = await 弹确认("覆盖当前时间轴",
-                `当前节点已有 ${段数} 段时间轴数据，加载「${名}」会全部覆盖，继续？`);
+        const 草稿 = 真源.读剪辑草稿(node);
+        const 草稿段数 = Array.isArray(草稿?.segments) ? 草稿.segments.length : 0;
+        if (段数 > 0 || 草稿段数 > 0 || Object.keys(草稿?.brief || {}).length > 0 || 编辑状态?.有内容) {
+            const ok = await 弹确认("覆盖当前计划",
+                `当前节点已有时间轴、剪辑草稿或规划表单内容，加载「${名}」将覆盖这些内容，继续？`);
             if (!ok) { 加载sel.value = ""; return; }
         }
         try {
             const res = await fetch(加载接口 + "?name=" + encodeURIComponent(名));
             const data = await res.json();
             if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-            // 目标仍是发起时的同一节点且时间轴/草稿未被并发改，才写回；否则丢弃过期回写并提示。
+            if (编辑状态?.签名 !== 取规划编辑状态?.()?.签名) {
+                toast("规划表单已变化，计划未应用，请重试"); return;
+            }
             const 已提交 = 提交节点快照(快照, 取节点?.(), (目标) => 应数据(目标, data?.数据, data?.缺草稿));
             if (!已提交) { toast("节点、时间轴或草稿已变化，计划未应用，请重试"); return; }
-            全刷?.();   // 触发 状态栏面板.回填() + 时间轴面板.渲染()，让所有 UI 与新 widget 值对齐
+            计划已加载?.();
             const 缺失 = Array.isArray(data?.缺失素材) ? data.缺失素材 : [];
             const 附注 = [];
             if (缺失.length) 附注.push(`跳过 ${缺失.length} 个缺失的参考素材：${缺失.join("、")}`);

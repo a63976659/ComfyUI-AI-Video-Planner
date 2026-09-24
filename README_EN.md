@@ -34,12 +34,12 @@ All the actual generation work is done by ComfyUI's official MiniMax H3 nodes. T
 
 ## What it does
 
-- **AI one-click storyboarding**: fill in a brief on the AI Planning tab (topic, total duration, segment count, platform, skill, etc. — 13 fields), and an LLM produces a multi-segment storyboard draft following short-video methodology. No manual per-segment typing required.
+- **AI one-click storyboarding**: fill in a brief on the AI Planning tab (topic, total duration, segment count, platform, skill, etc. — 12 fields), and an LLM produces a multi-segment storyboard draft following short-video methodology. No manual per-segment typing required.
 - **Per-segment AI prompt refinement**: the storyboard first lands as a "clip timeline" rehearsal draft you can trim/split/delete/reorder and zoom in on for precision, then an LLM rewrites each segment's visual prompt guided by the chosen skill docs. Only when you're happy do you "Fill into node" to commit it to the timeline.
 - **Split a long video into segments**: add as many segments as you want on the timeline, each with its own prompt and duration.
 - **Pick a generation mode per segment**: text-to-video, image-to-video, first-and-last-frame, reference-to-video, video-to-video, reference-plus-video — six modes in total, and you can mix them across segments.
 - **Attach reference materials per segment**: images, videos or audio. Use tags like `<Picture 1>` inside the prompt to point at them.
-- **Smooth handoff between segments (optional)**: turn on the "Gradient Transition" toggle and the tail of the previous segment (both picture and sound) is carried into the next one, plus a 4-frame crossfade at the seam, so seams don't jump. Turn it off and every segment is generated independently with a hard cut at the seam.
+- **Smooth handoff between segments (optional)**: turn on the "Gradient Transition" toggle and the tail of the previous segment (picture plus about a second of audio) is carried into the next one as continuation conditions; seams no longer blend two clips together — only the continuation's opening gets a light color grade, so seams don't jump. Turn it off and every segment is generated independently with a hard cut at the seam.
 - **Generated segments are saved automatically**: each finished segment is written to disk. Next time you run, unchanged segments are re-used instead of regenerated — a full re-run takes only tens of seconds.
 - **Segment cache is visible and controllable**: the "Cache" strip on the **node's timeline toolbar** shows segment-cache stats (version/entries/size), offers one-click "Clear Segment Cache", and a "invalidate version +1" to force a full re-sample; replacing a material file or changing an upstream segment now cascades invalidation automatically — no silent reuse of stale results.
 - **The node's own timeline zooms too**: the DOM widget on the node carries the same **1–40×** zoom ("Fit" / "Zoom out" / slider / "Zoom in" on the right of its toolbar, with a live factor read-out), plus **wheel-to-zoom** on the track (Ctrl+wheel / pinch is more sensitive), **drag the time ruler to pan**, and a horizontal scrollbar for what falls outside the view — so many segments or a narrow node no longer means dragging the node wider. Still **view-only**: no segment start/end or duration changes, nothing is written to the widget, no re-execution is triggered and the cache signature stays untouched.
@@ -71,14 +71,14 @@ Node outputs: image, audio, frame rate, total frame count, and a report string. 
 
 ### Step 2: Open the bottom status bar
 
-Once the plugin loads, a **Video Planner** panel appears at the **bottom of the ComfyUI page**. Its title bar splits into two tabs: **AI Planning** (left, default) and **Prompt Editor** (right) — click a title to switch pages.
+Once the plugin loads, a **Video Planner** panel appears at the **bottom of the ComfyUI page**. Its title bar carries two tabs: **AI Planning** (left, default) and **Prompt Editor** (right) — click a tab to switch pages (clicking the active tab again collapses the panel, once more re-expands it).
 
 The **Prompt Editor** page contains:
 
 - **Generation type** — switch between the 6 task modes
 - **Preset** — pick a saved prompt snippet from a dropdown; its body is written into the global prompt automatically (details in [Presets](#presets))
 - **Prompt editor** — write the global prompt, which gets prepended to every segment
-- **Reference files area** — upload images / videos / audio; duplicates are detected automatically: same name + same content reuses instantly, same name + different content is auto-renamed so they coexist instead of overwriting each other
+- **Reference files area** — upload or drop images / videos / audio; dropped files are sorted to the right box by file type (images → image box, and so on), unrecognized types are refused, and a full box (9 images / 3 videos / 3 audio) takes nothing more; duplicates are detected automatically: same name + same content reuses instantly, same name + different content is auto-renamed so they coexist instead of overwriting each other; each type has a fixed three-row material box — when it overflows, scroll inside the box with the wheel; below the all-segments-shared switch sits a "Clear materials" button that wipes this segment's added materials in one click, guarded by a confirmation pop-up dialog against accidental taps
 - **Plan data** — save/load the entire node setup with one click (details in [Plan data](#plan-data-save-and-load-full-setups))
 - **Timeline** — the main working area
 
@@ -90,9 +90,9 @@ The **AI Planning** page offers one-click storyboarding, a clip-timeline rehears
 
 If you don't want to fill segments by hand, follow this flow (first-time users need an API model configured — see [API model setup](#api-model-setup)):
 
-1. **Fill the brief**: Topic (required), Total duration (minutes, default 3), Segment count (0 = auto), Suggested per-segment duration (default 5-8 s, controls pacing), Platform, Default task, Hook, Language (the 11 dialogue languages H3 supports stably), Resolution, Style, Audience, Skill, Auxiliary — 13 fields in total.
+1. **Fill the brief**: Topic (required), Total duration (minutes, default 3), Suggested per-segment duration (default 5-8 s, controls pacing), Segment count (0 = auto), Default task, Hook, Language (the 11 dialogue languages H3 supports stably), Style, Platform, Audience, Skill, Auxiliary — 12 fields in total.
 2. **Pick a model, click "Generate plan"**: the backend calls the LLM to produce the storyboard JSON (first segment forced to "Hook", last one must be "Ending/CTA", each segment 5–15 s), saved into a hidden "clip draft" widget on the node. The draft **does not participate in generation** — the node timeline stays untouched. If segments come back short, the backend **automatically attempts one targeted repair** (it never duplicates one segment's footage to fake completeness); if still short, it returns an **incomplete draft** with an on-page orange warning. When a knowledge-base skill is selected, the page honestly reports the **sources that actually entered the request** (truncation / missing counts included).
-3. **Polish on the clip timeline**: an editing-room-style track — click empty space to add a segment, drag card edges to trim, "✂ Split" cuts the segment at the playhead, "🗑 Delete" ripple-deletes (remaining segments close the gap), multi-select, drag to reorder. The time ruler above the track auto-adjusts its density to the total duration (seconds up to hours). Each card shows index/range/title/beat/subtitle/keywords inline.
+3. **Polish on the clip timeline**: an editing-room-style track — click empty space to add a segment, drag card edges to trim, "✂ Split" cuts the segment at the playhead, "🗑 Delete" ripple-deletes (remaining segments close the gap), multi-select, drag to reorder. The time ruler above the track is always visible (an empty draft still shows a 0-30 s scale) and auto-adjusts its density to the total duration (seconds up to hours). Each card shows index/range/title/beat/subtitle/keywords inline.
 4. **Zoom in for precision (view-only)**: the toolbar's "Fit / Zoom out / slider / Zoom in" magnifies the track up to **1–40×**, with the current factor shown right next to it. You can also **scroll-wheel to zoom** directly on the track (Ctrl+wheel / trackpad pinch is more sensitive), **drag the time ruler to pan**, or use the horizontal scrollbar. Ruler ticks auto-step down as you zoom in (hours → minutes → seconds → 0.1 s), so even a feature-length draft can be aligned segment by segment. Zoom only changes view width: it never touches segment start/end times, never writes the clip draft, the node timeline, or the cache signature — trim / split / playhead scrubbing / multi-select / reordering stay pixel-accurate at any factor.
 5. **"✨ AI Generate Prompts"**: the LLM rewrites each segment's full visual prompt based on the brief and skill docs, automatically switching modes by enable state — when **all segments are enabled** it batch-generates as before, covering only *enabled* segments (managed via Enable / Enable all / Disable all on the toolbar); when **only some are enabled**, all segments are uploaded as **read-only context** and the server **rewrites only the enabled segments** (disabled segments keep their original prompts and don't need to be count-matched) — whatever segment goes out is filled back into that same segment. The Skill/Auxiliary/Model used for generation sit in the row above the track. Write-back is mapped by segment identity — if one segment fails it **keeps its original draft and is flagged** (never silently overwriting with the old wording as if it were a new result); failed segments trigger a confirmation.
 6. **Per-segment fine editing**: select a card and edit Title / Structure / Subtitle / Prompt in the right column, kept in sync with the matching card blocks ("Structure" is the UI label for the narrative-beat field shown on the card).
@@ -107,7 +107,7 @@ If you don't want to fill segments by hand, follow this flow (first-time users n
 - **Toggle Run**: the switch below each segment card. Only checked segments get regenerated; unchecked ones with a saved copy are reused
 - **Edit prompt / attach references**: click into the segment card
 - **Playhead**: drag it to see which segment covers a given moment
-- **Gradient Transition**: a toggle on the timeline toolbar. When on, segments blend smoothly into each other (tail-context anchoring + a 4-frame crossfade at the seam); when off, seams are hard-cut
+- **Gradient Transition**: a toggle on the timeline toolbar. When on, segments blend smoothly into each other (tail-context anchoring + a light opening color grade on the continuation, zero-overlap seams); when off, seams are hard-cut
 
 Timeline data is stored as JSON inside the node's `Timeline Data` input. You can copy and paste it, which makes archiving and sharing easy.
 
@@ -330,7 +330,7 @@ The `Frame Rate` input on the node is just a tag written into the output video f
 Controlled by the "Gradient Transition" toggle (off by default):
 
 - **Off** (default): each segment is generated independently. Seams are hard-cut with no transition processing.
-- **On**: the last 22 frames of picture and sound from the previous segment are carried into the next one, plus a 4-frame crossfade at the seam. Handoffs look more natural, but things can also go wrong more easily.
+- **On**: the last 22 frames of picture and roughly the last second of audio from the previous segment are fed into the next one as continuation conditions (latents are passed directly, with no decode→re-encode round trip), so the next segment picks up right where the previous one ended. Seams are zero-overlap hard cuts — only the opening of the continuation segment gets a light low-frequency color grade (its tone/brightness eased toward the previous segment's tail; the two clips are never blended together).
 
 If you see smearing, ghosting, or artifacts, first turn Gradient Transition off to check whether it's the model itself.
 
@@ -360,104 +360,131 @@ Set the environment variable `H3_计时=1` and the log breaks each segment down 
 
 ## Changelog
 
+**2026-09-24**
+
+- With "Gradient Transition" enabled, the next segment continues right after the last frame of the previous one, so joints no longer look abrupt.
+- Fixed each seam silently losing 4 frames; the finished video now matches the planned duration exactly.
+- A segment with no audio gets an equal-length silence filled in automatically, so sound and picture no longer drift apart.
+- The environment is now auto-checked before a continuation; if it's incompatible you get a readable error up front instead of a mid-run failure.
+- ⚠️ The cache format was upgraded: all previously generated segments are invalid and the first run must be done from scratch, so allow extra time.
+- Image quality and speed have not been verified on real hardware yet; feedback welcome.
+- The "Subtitle" box in the AI planning page's right column is shorter now, handing the freed space to the prompt box below.
+- The bottom panel got shorter and the empty band under it narrowed; card text now shows more lines as cards grow taller.
+- The button bars above the timeline and prompt editor stay on one row and slide sideways when the window is narrow, instead of stacking into rows.
+- Fixed the AI planning page's left column spilling out of its box in short windows; text size is unchanged and no vertical scrollbar appears.
+- The left column's info lines now show a single line with the full text on hover, and pressing "Generate plan" clears them first.
+- Fixed the empty band at the bottom of the prompt editor page when the window is tall.
+- Fixed the clip timeline looking blank before any plan is generated; its ruler is always shown now, so the timeline is always there.
+- The first/last/middle-frame dropdowns on the prompt editor got slimmer, so the left and right columns are now about the same width.
+- The three material boxes on the prompt editor now center their content; the scrollbar no longer takes up space inside the box, and the wheel still scrolls when there are many items.
+- Dropped materials now sort themselves by file type: an image goes to the image box no matter which area you drop it on, likewise video and audio; unrecognized file types are refused, and a box that's already full takes nothing more.
+- A new "Clear materials" button below the all-segments-shared switch wipes this segment's materials in one click, but only after you confirm it in a pop-up dialog, so an accidental tap can't delete anything.
+- Fixed the reference-material list popping up from the "@" button sometimes flashing and vanishing before its options appear; it now opens reliably whether you click fast or slow.
+- The "@" reference-material list can now be dismissed three ways: click "@" again, click anywhere else on the page, or pick an item — no more being forced to select one.
+- "All-segments shared" and "Clear materials" now stack in two rows instead of crowding one row, saving horizontal space in the material area.
+- Rearranged the AI Planning tab's left column: Topic on its own row, then Total duration + Per-segment, Segment count on a full-width row (input widened so the number is no longer clipped), Task + Hook, Language + Style, Platform + Audience, Skill + Auxiliary, and finally Model + Generate plan.
+- Test baseline: `pytest 测试/` **1067 passed**, frontend `node --test 测试/*.test.mjs` **373 passed**, ruff clean.
+
+**2026-09-23**
+
+- Fixed old materials still showing after "Fill into node", and them reappearing when switching task types or rebinding the node.
+
 **2026-09-21**
 
-- **Node timeline zoom**: the timeline panel mounted on the node gained the same "Fit / Zoom out / slider / Zoom in" quartet on the **right side of its toolbar**, magnifying the track by **1–40×** with a live factor read-out; **wheel on the track zooms** (Ctrl+wheel / trackpad pinch is more sensitive, horizontal trackpad swipes stay with native scrolling), **dragging the time ruler pans**, and the horizontal scrollbar reaches segments outside the view — so a segment-heavy or narrow node no longer has to be dragged wider. Still **view-only**: segment start/end and durations don't change, nothing is written to the widgets, no re-execution is triggered and the cache signature is untouched; with 0 segments the controls are disabled and the view resets to full. The zoom group sits right against the "N segments" summary, matching its position on the clip timeline.
-- **Segment-card thumbnails & material-source linkage**: the timeline card image now goes through a single pipeline — "resolve the effective material source first, then decide what to show by task type" — picking the image by the priority shared-material override → segment image slot → global fallback on a missing key (an explicit empty array / empty value does not fall back). Fixes reference tasks such as v2v not reading the global materials when the image key is missing, string image names being truncated to their first character, and the shared-material toggle not refreshing affected cards. Clearing the first/last frame, switching the task type, or removing a candidate image with "×" now update the card instantly; standalone preset first/last frames repopulate correctly in the dropdown and can be reused when switching back. Front-end display layer only — sampling, the segment cache and plan saving are untouched.
-- Test baseline: front-end `node --test 测试/*.test.mjs` 203 → **260 passing** (12 node-timeline zoom locks + segment-card thumbnail / material-source / task-switch linkage regression locks), `pytest 测试/` 615 → **616 passing** (a new cross-file mirror lock keeping `最大缩放` and the zoom icons identical between the two timelines), ruff clean.
-- **AI Planning right-column label "Beat" renamed to "Structure"** (front-end text only, better matching short-video narrative structure): the data keys `职能`/`职能色`, backend enums, the LLM output contract, and the value shown on segment cards all stay unchanged — cards still display the narrative-beat value.
+- The node timeline gained zoom: scroll the wheel to zoom, drag the ruler to pan — view only, nothing is changed.
+- The "Beat" field label on the AI planning page was renamed to "Structure"; the content is unchanged.
+- Card thumbnails now follow material changes correctly and instantly; several cases of missing images were fixed.
+- Test baseline: front-end `node --test 测试/*.test.mjs` 203 → **260 passing**, `pytest 测试/` 615 → **616 passing**, ruff clean.
 
 **2026-09-20**
 
-- **Timeline zoom** added to the clip timeline: the toolbar's "Fit" / "Zoom out" / slider / "Zoom in" controls magnify the track by **1–40×** and show the current factor live; **scroll-wheel on the track zooms** (Ctrl+wheel / trackpad pinch is more sensitive, and horizontal trackpad swipes are left to native scrolling), **dragging the time ruler pans**, and the horizontal scrollbar works too. Ruler ticks step down automatically as you zoom in (hours → minutes → seconds → 0.1 s), so long pieces can still be aligned precisely. It is **view-only** — no segment durations change, nothing is written to the clip draft, and neither the node timeline nor the cache signature is touched; trim / split / scrub / multi-select / reorder stay accurate at any factor.
-- A self-review of that zoom work fixed six defects (1×P1, 4×P2, 1×P3): the horizontal position was lost whenever the track was rebuilt (the playhead got pushed out of view) → the view is now restored once the container is measurable, and the DOM's real scroll position is read back as the single source of truth; panning was not part of the unified drag state machine, so it fought wheel-zoom and node re-binding and leaked end-event listeners → folded into one state with proper cancellation; "✨ AI Generate Prompts" / "🔁 Retry selected segments" are now disabled in place with changing label text and restored when finished (no more lost icons or font size); a declaration-order slip where a later `font:inherit` overrode the buttons' fixed line-height was corrected; and a queued animation frame used to double-paint the ruler → pending rAF handles are now cancelled before a synchronous refresh.
-- The Cache strip moved from the bottom status bar **into the node's timeline toolbar** (right after the "Gradient Transition" toggle): the invalidate version is a **node-level** fact, so keeping it in the bottom bar mismatched "which node am I editing" against "which node am I invalidating"; stats/clear are process-level facts and simply followed the control next to the cache's producer.
-- Whole-page **density pass + unified buttons + theme following**: more content per screen (root font 11 px, segment cards 10 px, tighter gaps and padding, card keywords 3 → 2 lines, panel min-height 240 → 210); toolbar buttons share size/font/cursor styling and the zoom icons became `currentColor` strokes that follow the theme; node and panel skin colors now go through ComfyUI theme variables, so **light themes no longer leave dark blocks** (only the two identity colors — selection green, delete red — stay fixed, guarded by a static test).
-- The AI Planning brief's "Auxiliary" now shares the **same source** as "Skill" (plugin-root `Skills/`); the clip timeline generation row's Skill/Auxiliary still use `MiniMax-H3知识库`, and the two sources remain independent.
-- Test baseline: front-end `node --test 测试/*.test.mjs` 164 → **203 passing** (19 new zoom-review regression locks), `pytest 测试/` **615 passing**, ruff clean.
+- The clip timeline gained zoom, up to 40x for precise segment-by-segment alignment; it only changes the view, never segment lengths.
+- Fixed several defects found reviewing the zoom: the view jumping back, buttons vanishing mid-run, and so on.
+- The cache strip moved from the bottom status bar into the node's timeline toolbar.
+- The whole page was tightened to fit more on screen and buttons were unified; colors follow the theme, so light themes no longer leave dark blocks.
+- "Auxiliary" and "Skill" on the AI planning page now share one source; the clip timeline keeps its own, and the two stay independent.
+- Test baseline: front-end `node --test 测试/*.test.mjs` 164 → **203 passing**, `pytest 测试/` **615 passing**, ruff clean.
 
 **2026-09-19**
 
-- Segment cache & execution layer:
-  - ⚠️ **Segment cache format bumped h3-6 → h3-7 (breaking)**: the fingerprint gains four dimensions — material content digest, previous-segment fingerprint cascade for anchored segments, provable model-chain identity + cache-invalidate version — and drops playback fps; old-version cache folders are deleted automatically at startup, so **every already-generated segment is invalidated and the first run needs a full re-sample** (budget the time). Upside: replacing material content under the same name, or changing an upstream segment, now cascades invalidation automatically instead of silently false-hitting; changing only the output frame rate no longer nukes the whole cache.
-  - New "Cache" strip in the status bar: segment-cache stats (version/entries/size), one-click "Clear Segment Cache", and "invalidate version +1" / direct edit (writes the node's "缓存失效版本" widget).
-  - Media upload dedup upgraded: same-name-but-different-content files no longer overwrite/confuse each other — they are auto-renamed to `name.<content-digest>.<ext>` and coexist; same-name-same-content still dedups instantly.
-  - Pre-flight checks before execution: material files, key numeric values & per-segment durations, and required official nodes are validated up front with clear errors instead of blowing up mid-run.
-  - The completion report gains a three-duration line (planned → projected after align/trim → actual final video) and a memory-budget line; when the budget exceeds the hard cap it aborts before decoding with a clear error instead of OOM-crashing.
-- Planning quality & backend request governance (Stage 4):
-  - **Per-segment prompt status is no longer masked by a whole-batch result**: when a segment returns no output it keeps its original draft and the specific failing segment is flagged (not just a total count); the front end writes back by segment identity and never silently overwrites old wording as a new result.
-  - **New local retry (`/lvp/plan/prompts/retry`)**: the clip timeline's "🔁 Retry selected segments" rewrites only the selected segments; the rest go up as read-only context and the server rewrites only the targets.
-  - **Short segment counts are no longer padded by silently duplicating the last segment**: at most one targeted repair is attempted; if still short, an incomplete draft is returned with valid segments plus diagnostics.
-  - **Honest knowledge-base source echo**: lists only material that actually entered the request; truncation / over-budget skips / missing are visible in the UI; duration keeps the equal-split default (LLM per-segment relative durations not adopted — logged as a follow-up experiment).
-  - **Backend request governance**: classified LLM errors (auth/rate-limit/client/server) mapped to HTTP status by code, whole-order timeout budget, retry only for retryable errors, 2 MiB default response-body cap, process-wide concurrency slots (busy → 503 over limit); preset scanning moved off the event loop with an mtime-invalidated bounded cache.
-- Audio alignment fix: segments missing audio are now padded with equal-length silence (A/V total strictly matches) instead of being skipped (which caused cumulative per-segment drift); all-silent input → silent output.
-- For non-24 fps output, the report adds an explicit line: "sampled at 24 fps, played back stretched to your frame rate" (frame rate is just a tag; the time base is never silently changed).
-- The AI Planning brief form now remembers per node: switching bound nodes no longer loses unsaved edits (auto stash/restore on rebind; the draft wins after submit).
-- Narrow-panel adaptation: at panel width ≤480px the brief form takes the full row and the right-hand segment-detail column collapses instead of overflowing.
-- Panel teardown: leftover subscriptions are cleaned up on node removal / module hot-reload, avoiding ever-slower zombie listeners.
+- ⚠️ Segment cache rules were greatly tightened: a replaced material or a changed earlier segment is now detected and recalculated automatically; every previously generated segment is invalidated and the first run must be redone from scratch.
+- A cache toolbar was added to the status bar for viewing cache stats, clearing with one click, and bumping the invalidate version.
+- Uploaded files with the same name but different content no longer overwrite each other — they are renamed and kept side by side; same name plus same content is still stored once.
+- Files and parameters are now checked before generating, so problems are reported clearly up front instead of blowing up mid-run.
+- The completion report lists planned, expected, and actual durations; when memory is not enough it stops early with a clear reason instead of crashing.
+- When a segment's prompt fails, the exact segment is flagged and keeps its original wording instead of being mixed into a batch-level message.
+- The clip timeline gained "Retry selected segments", rewriting only the picked segments and leaving the rest alone.
+- Short segment counts are no longer padded by secretly duplicating the last segment; the real segments are returned with a clear reminder.
+- Source reporting became honest: only material that actually entered the request is listed.
+- Backend requests were tidied up: errors are classified and reported clearly, and an overloaded server now answers "busy" right away.
+- A segment with no audio now gets silence filled in, so audio and video totals match strictly.
+- When the output frame rate is not 24, the report now states plainly that the video is made at 24 fps and stretched at playback; durations are never silently changed.
+- The AI planning page remembers what you typed per node, so switching nodes no longer loses unsaved entries.
+- In narrow panels the form takes the full row and the right column collapses instead of overflowing.
+- Leftover callbacks are cleaned up when nodes are removed or refreshed, so the page no longer gets slower over time.
 
 **2026-09-18**
 
-- The AI Planning page's "Skill" got its own source: a new plugin-root `Skills/` folder (first-level sub-folder = skill name), no longer sharing a folder with the clip timeline generation row's skill (which still uses MiniMax-H3知识库).
-- Clip timeline UI rework: the track is always visible (ruler and track render even with 0 segments); segment details now live directly on the cards (title/beat/subtitle/prompt, progressively hidden on narrow cards); clip-timeline and node-timeline selections are decoupled; new adaptive time ruler (density auto-scales from seconds to hours with total duration).
-- Toolbar adds Enable / Enable all / Disable all: "AI Generate Prompts" now only covers enabled segments; the old Run/Stop button was removed (the video-generation run switch stays on the node front-end).
-- Renamed "Role" to "Beat" across the whole chain (the options were always narrative functions: hook/opening/setup/progression/conflict/climax/twist/ending/CTA): UI label, LLM output contract, segment data keys (`beat`/`beat color` rendered as `职能`/`职能色`), backend enums, front-end read/write, and plan samples are now consistent (development stage, no legacy-key compatibility); dropped the 👤 prefix on cards; the right column gained a "Prompt" editor — its four fields now match the card blocks by name.
-- The clip-draft source of truth moved from a hidden widget to `node.properties`: editing the draft no longer invalidates ComfyUI's execution cache or forces the node to re-run, and it still saves with the workflow (old workflows auto-migrate on load).
-- Fixed a batch of AI Planning page race/refresh issues: async AI responses no longer clobber another node or a newer draft; selection and highlight stay in sync for non-bound nodes; the right column refills with the new prompt right after "AI Generate Prompts"; the brief "Skill" dropdown refreshes on every expand (reflecting skills added/removed under `Skills/`) while keeping the current selection; picking "None" no longer accidentally triggers skill-doc loading; the main + auxiliary skill docs now share one character budget (no longer doubled).
-- Cleaned the bundled plan samples: the per-segment task in `测试2/测试3.json` was corrected from a Chinese label to a task code (old samples failed at execution with "unknown task type").
+- The AI planning page's "Skill" moved to its own folder, no longer shared with the clip timeline.
+- Clip timeline rework: the track is always visible, details sit right on the cards, the two timelines select independently, and the ruler auto-scales with total duration.
+- The toolbar gained Enable / Enable all / Disable all; prompt generation now only covers enabled segments.
+- "Role" was renamed to "Beat" everywhere, and the right column gained a "Prompt" box.
+- The clip draft now lives in node properties, so editing it no longer forces the node to re-run, and it still saves with the workflow.
+- Fixed a batch of AI planning page display and refresh problems: no more wrong-node overwrites, new prompts fill in right away, and the skill list keeps your selection.
+- Cleaned the bundled plan samples, which used to fail with "unknown task type".
 
 **2026-09-17**
 
-- The status bar split into "AI Planning / Prompt Editor" tabs; the brief form moved inline into the AI Planning page and grew to 13 fields (minute-based total duration, suggested per-segment duration, resolution, language expanded to H3's 11 stable dialogue languages, …).
-- Added H3 knowledge-base style-skill injection: pick a skill and the storyboard is written in that skill's visual language (failures degrade gracefully to generic storyboarding).
-- Several rounds of polish on the API model setup panel: unified list of the preset model (Kimi-K3) plus custom models, per-model API keys, a "Test connectivity" button, full-width card layout; global timeout floor raised 30→120 s.
-- Added the "clip timeline" rehearsal-draft editor: new hidden widget 剪辑草稿 (clip draft, never participates in generation), trim/split/ripple-delete/multi-select/drag-reorder, per-segment "AI Generate Prompts" (new `/lvp/plan/prompts` endpoint), and "Fill into node" to commit. The in-node timeline and the execution chain are untouched.
-- Fixed: the brief's "Default task" Chinese label leaked into the execution chain and made generation fail with "unknown task type" (plans saved before the fix need re-planning).
+- The status bar split into "AI Planning" and "Prompt Editor" pages; the planning form grew to 13 fields.
+- Added skill style injection: the storyboard is written in the chosen skill's style, falling back to a generic write-up if it can't be loaded.
+- Several rounds of polish on the API model settings page: one unified model list, per-model keys, and a "Test connectivity" button.
+- Added the clip timeline draft editor: trim, split, delete, reorder, per-segment AI prompt generation, and "Fill into node".
+- Fixed a Chinese label from the planning page leaking into the run and failing with "unknown task type".
 
 **2026-09-16**
 
-- **AI planning (H3 planner) shipped**: brief form → LLM multi-segment storyboard following short-video methodology → timeline colored by narrative beat, with zero changes to the sampling/execution chain.
-- r2v/rv2v segment thumbnails now fall back to the global reference pool; switching the global task type syncs to the selected segment; the front-end now follows the ComfyUI theme (hard-coded colors migrated to host variables).
-- API model config became an embedded settings-page panel, default model Kimi-K3, with user-defined models supported.
+- The AI planning page shipped: fill in a topic and it produces a multi-segment storyboard shown on a color-coded timeline, with no impact on the existing generation flow.
+- Segments missing an image now fall back to the global materials; switching the task type syncs to the selected segment; the UI follows the app theme.
+- API model settings became an embedded panel on the settings page, with custom models supported.
 
 **2026-09-15**
 
-- Generation is now split into two stages: sample each segment to disk first, then decode and stitch them all at the end. This fixes the case where a 16 GB card running long high-resolution segments saw decoding take 839 seconds instead of 52.
-- Segment handoff no longer goes through a "decode → re-encode" round trip. It slices the tail off the previous segment's intermediate result and uses that directly, so seams are more faithful.
-- Stitching now writes each decoded segment straight into a pre-allocated buffer. Peak memory dropped from about 3 segments' worth to about 1 segment plus a bit.
-- Fixed: the progress bar could never reach 100% when some segments were skipped and had no cache.
-- Fixed: a bug in the backend timing log that made "reference decoding" always show 0.00 seconds.
-- Fixed: when the context length was set between 1 and 4, seams got 4 extra duplicated frames.
-- Cache is now stored per-version in a subfolder, and old-version folders are deleted automatically at startup. This finally fixes the historical problem where upgraded-away caches became dead files nobody ever cleaned out of `%TEMP%` (27.9 GB had piled up). Future upgrades no longer require manual cleanup.
-- The bottom status bar's segment-level progress ("Generating 3/7") had never actually worked before. It was receiving the sampler's internal denoising steps instead — dozens of them flickering by. It now uses the plugin's own channel, so segment progress is genuinely visible.
-- Hardened: if a cache file gets corrupted externally (frame count disagrees with the actual data), it's now rejected on the spot and regenerated, instead of blowing up later during decoding/stitching — which would have wasted hours of sampling.
+- Generation now writes each segment to disk first and stitches at the end, greatly improving decode speed for long segments on small-memory cards.
+- Segment handoff now slices directly from the previous segment's result, so seams are more faithful.
+- Peak memory during stitching dropped from about 3 segments' worth to just over 1.
+- Fixed the progress bar never reaching 100% when a segment was skipped without cache.
+- Fixed the timing log always showing 0 seconds for reference decoding.
+- Fixed 4 extra duplicated frames at seams under some settings.
+- Cache is now stored per version with old versions deleted at startup, so upgrades no longer need manual cache cleanup.
+- Fixed segment-level progress ("Generating 3/7"), which had never actually shown before; it is now genuinely visible.
+- A corrupted cache file is now rejected and regenerated on the spot, instead of failing hours later and wasting the run.
 - Unit tests grew from 196 to 217, all passing.
 
 **2026-09-14**
 
-- The node now has two optional model inputs and picks the right one per segment automatically. No manual switching.
-- Before running, it only checks that the models actually used by the timeline are connected, and names whichever one is missing.
+- The node now carries two optional model inputs and picks the right one per segment automatically.
+- Before running, only the models actually used are checked, and the missing one is named.
 - The two models keep separate caches, so mixed timelines no longer reload them repeatedly.
-- Reordered node inputs so the encoder shows first.
+- Node fields were reordered so the encoder shows first.
 - ⚠️ Old workflows need their model links re-plugged and two hidden toggles re-checked; old caches are invalidated once.
 
 **2026-09-13**
 
-- Output size is now truly controlled by megapixels. Default output changed from 1376×768 to 864×480.
-- Default steps dropped from 25 to 20; default megapixels in the status bar dropped from 1.0 to 0.4.
+- Output size is now truly controlled by megapixels, with the default output lowered to 864×480.
+- Default steps dropped from 25 to 20 and default megapixels from 1.0 to 0.4.
 - Added an automatic check that frontend and backend values stay consistent.
 
 **2026-09-12**
 
 - Fixed audio reference loading failures.
-- Fixed incorrect task type for new segments.
+- Fixed the wrong task type on newly added segments.
 - Created the project README.
 
 **Still planned**
 
-- Second-pass refinement (iterative rewrites on top of existing segments)
+- Second-pass refinement: iterative rewrites on top of already generated segments.
 
-> The old v2 items "AI-powered automatic shot planning, prompt refinement, project file import/export" have all shipped (2026-09-16~18) as the AI Planning page, per-segment AI prompt refinement, and Plan data respectively; "cache cleanup" shipped 2026-09-19 as the Cache strip (moved into the node's timeline toolbar on 2026-09-20).
+> The originally planned "automatic AI storyboarding, prompt refinement, and project import/export" have all shipped (2026-09-16~18); "cache cleanup" shipped as the cache toolbar (2026-09-19).
 
 ---
 
@@ -465,7 +492,7 @@ Set the environment variable `H3_计时=1` and the log breaks each segment down 
 
 - **Bug reports**: please include your ComfyUI version, GPU model and VRAM, H3 model version, the full error text from the red panel, and the timeline JSON (feel free to redact).
 - **Feature requests**: open an Issue.
-- **Pull requests**: keep `pytest 测试/` at the 616-passed baseline and the front-end suite `node --test 测试/*.test.mjs` at 260 passing, and match the existing code style.
+- **Pull requests**: keep `pytest 测试/` at the 1067-passed baseline and the front-end suite `node --test 测试/*.test.mjs` at 373 passing, and match the existing code style.
 
 ---
 

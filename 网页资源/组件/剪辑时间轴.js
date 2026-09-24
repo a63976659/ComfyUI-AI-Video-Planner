@@ -6,6 +6,8 @@
 // 交互参照 AIVideo_node/网页资源/时间线面板.js（边缘把手命中/拖拽状态机）与
 //   OpenCut（播放头处分割 split-at-playhead、删除后 ripple 闭拢、trim 为 rolling 边界）。
 import { 真源, 捕获节点快照, 提交节点快照, 使节点快照失效, 新段ID, 分配段ID } from "./桥接/节点桥.js";
+import { 打开台词时长 } from "./台词时长面板.js";
+import { 分配中间帧 } from "./中间帧.js";
 
 const 吸附步 = 0.5;
 const 最小时长 = 0.5;
@@ -106,7 +108,7 @@ function 注入样式() {
       .lvp-ct-槽{position:relative;flex:0 0 0;min-width:0;overflow:hidden}
       .lvp-ct-槽:last-child>.lvp-ct-卡{right:0}
       .lvp-ct-卡{position:absolute;inset:0 ${列间隙}px 0 0;display:flex;flex-direction:column;gap:3px;min-width:0;
-        padding:3px 5px;overflow:hidden;cursor:pointer;container-type:inline-size;
+        padding:3px 5px;overflow:hidden;cursor:pointer;container-type:size;
         background:linear-gradient(180deg,var(--comfy-menu-secondary-bg,#202226),var(--bg-color,#1b1d21));
         border:1px solid var(--ct-line);border-left:3px solid var(--rolec,#8c8c8c);border-radius:6px;
         transition:border-color .12s,box-shadow .12s,opacity .14s,filter .14s}
@@ -144,6 +146,14 @@ function 注入样式() {
       @container (max-width:60px){.lvp-ct-区间:not(:focus-within){display:none}.lvp-ct-头:focus-within .lvp-ct-序,.lvp-ct-头:focus-within .lvp-ct-角色{display:none}}
       @container (max-width:44px){.lvp-ct-角色{display:none}.lvp-ct-词{-webkit-line-clamp:1}}
       @container (max-width:34px){.lvp-ct-把手{display:none}}
+      /* 宽卡（字幕/标题都还在显示的那一档）按卡高逐级多显几行，否则高卡只有两行字、下方整片空白。
+         容器查询量内容盒（＝卡高−边框2+内边距6）；行高 13.5、卡内固定开销≈34 ⇒ 4/7/10/14/19 行。
+         min-width 条件不可省：没有它，窄卡的 2 行/1 行降级会被下面这几条按高度抬回去。 */
+      @container (min-height:100px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:4}}
+      @container (min-height:140px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:7}}
+      @container (min-height:180px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:10}}
+      @container (min-height:240px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:14}}
+      @container (min-height:300px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:19}}
       .lvp-ct.忙 .lvp-ct-行,.lvp-ct.忙 .lvp-ct-卷{pointer-events:none;opacity:.55}`;
     document.head.appendChild(s);
     样式已注入.v = true;
@@ -172,6 +182,7 @@ export function 创建剪辑时间轴(容器, ctx) {
     // 生成行下拉（技能/辅助/模型）：与 brief 区同源枚举（/lvp/plan_meta、/lvp/llm_config），共用知识库文件夹。
     let 技能sel = null, 辅助sel = null, 模型sel = null;
     let 生成行El = null, b提示 = null, b填充 = null;   // C1：生成行持久化，避免每次渲染重建下拉导致技能/辅助/模型选择被清空
+    let b台词 = null;
 
     function 读草稿() { const n = 取节点(); return n ? 真源.读剪辑草稿(n) : { brief: {}, segments: [] }; }
     function 写草稿(段组) {
@@ -296,6 +307,7 @@ export function 创建剪辑时间轴(容器, ctx) {
     // 时间线（轨道上方的连续时间标尺）：刻度步长按 像素/秒 在 1s→…→1min→… 间自适应——
     // 时间线被拉长（总时长小/容器宽）显示秒刻度，被压缩（总时长大/容器窄）递进到分钟刻度（对标 OpenCut/CapCut 标尺）。
     const 刻度步长 = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200, 3600];
+    const 空轨刻度秒 = 30;   // 0 段空草稿的刻度保底跨度：空轴也常显 0–30s 连续刻度（2026-09-24 用户订正「保持剪辑时间轴刻度」）
     function 时刻文本(t, 步长) {
         if (步长 < 60) return `${Number(t.toFixed(6))}s`;
         const m = Math.floor(t / 60), s = Math.round(t % 60);
@@ -306,9 +318,10 @@ export function 创建剪辑时间轴(容器, ctx) {
         刷缩放视图(); 刷播放头();
         if (!时间线El) return;
         时间线El.replaceChildren();
-        const 总 = 总时长();
+        let 总 = 总时长();
         const 几何 = 时间几何(), 宽 = 几何.width;
-        if (!宽 || 总 <= 0) return;
+        if (!宽) return;
+        if (总 <= 0) 总 = 空轨刻度秒;   // 0 段常显刻度：不按段组总时长早退
         const 最小步 = 总 / Math.max(1, 宽 / 48);
         const 步长 = 刻度步长.find((s) => s >= 最小步) ?? 最小步;
         const 视口 = 卷El.getBoundingClientRect();
@@ -318,7 +331,7 @@ export function 创建剪辑时间轴(容器, ctx) {
             const t = k * 步长;
             const 格 = document.createElement("div");
             格.className = "lvp-ct-时刻";
-            格.style.left = `${时间到X(t)}px`;
+            格.style.left = `${时间到X(t, 总)}px`;
             格.textContent = 时刻文本(t, 步长);
             if (Math.abs(t - 总) < 1e-6) {
                 const 标签 = document.createElement("span"); 标签.textContent = 格.textContent;
@@ -472,9 +485,9 @@ export function 创建剪辑时间轴(容器, ctx) {
         for (let i = 0; i < rs.length; i++) { const r = rs[i]; if (cx < (r.left + r.right) / 2) return i; }
         return rs.length;
     }
-    function 时间到X(t) {           // 时间 → 相对「内」的 px（播放头/连续刻度定位；口径＝显示段组，trim 拖拽预览中跟预览值）
-        const r = 时间几何(), 总 = 总时长();
-        return r.left - 内left() + (总 > 0 ? Math.min(1, Math.max(0, t / 总)) * r.width : 0);
+    function 时间到X(t, 按总 = 总时长()) {   // 时间 → 相对「内」的 px（播放头/连续刻度定位；口径＝显示段组，trim 拖拽预览中跟预览值；刷时间线 传 按总 以支持 0 段保底跨度）
+        const r = 时间几何();
+        return r.left - 内left() + (按总 > 0 ? Math.min(1, Math.max(0, t / 按总)) * r.width : 0);
     }
     function 画插入线(目标) {
         if (!插入线 || !内) return;
@@ -626,7 +639,10 @@ export function 创建剪辑时间轴(容器, ctx) {
         //   不能沿用父段 id：展开 {...s} 会把父 id 复制给两半（重复），故显式重赋两个不同新 id。
         const 左 = { ...s, end: p, refs: 深拷refs(s.refs), segment_id: 新段ID() };
         const 右 = { ...s, start: p, refs: 深拷refs(s.refs), segment_id: 新段ID() };
-        g.splice(i, 1, 左, 右);
+        let 子段;
+        try { 子段 = 分配中间帧(s, [左, 右]); }
+        catch (e) { await 弹确认("无法分割", e.message); return; }
+        g.splice(i, 1, ...子段);
         写草稿(g); 选择集 = new Set([i + 1]); 设active(i + 1); 渲染();
     }
     // 手动新建：不经「生成规划」也能直接在时间轴上补一段空白段供编辑（参照 时间轴面板.js 的「＋新增段」）。
@@ -752,6 +768,29 @@ export function 创建剪辑时间轴(容器, ctx) {
             渲染();   // 按当前草稿重算按钮，不能把空草稿或已删除节点的按钮强行解锁
         }
     }
+    async function 台词估时() {
+        if (忙) return;
+        const n = 取节点(), 草 = 读草稿();
+        if (!n || !草.segments?.length) return;
+        const 快照 = 捕获节点快照(n);
+        收平移?.();
+        忙 = true; 根.classList.add("忙"); 渲染();
+        try {
+            const 新草 = await 打开台词时长(草, ctx.取规划总时长?.());
+            if (!新草) return;
+            if (!提交节点快照(快照, 取节点(), 目标 => 真源.写剪辑草稿(目标, 新草))) {
+                await 弹确认("台词重排未应用", "节点或草稿已变化，请重新打开台词估时并预览。");
+                return;
+            }
+            ctx.同步台词总时长?.(新草.brief.总时长);
+            选择集 = new Set([0]); 设active(0);
+        } catch (e) {
+            await 弹确认("台词估时失败", e.message || "未能完成估时，请重试");
+        } finally {
+            忙 = false; 根.classList.remove("忙"); 渲染();
+            if (取节点() === n && !b台词.disabled) b台词.focus();
+        }
+    }
     async function 填充节点() {
         if (忙) return;
         const g = 段组();
@@ -835,10 +874,12 @@ export function 创建剪辑时间轴(容器, ctx) {
         const b启用 = 建钮("启用", "", "切换选中段（或多选）是否参与 AI 生成提示词", 切启用);
         const b全启 = 建钮("全部启用", "", "所有段都参与 AI 生成提示词", () => 设全启用(true));
         const b全不启 = 建钮("全不启用", "", "所有段都不参与 AI 生成提示词（保持原 prompt）", () => 设全启用(false));
+        b台词 = 建钮("台词估时", "", "选择作为台词的字幕，按语速预览段长与拆分结果，确认后只更新草稿", 台词估时);
+        b台词.disabled = 忙 || !节点 || !有段;
         b新建.disabled = 忙 || !节点;   // 节点 已在 渲染() 头部取好（取节点()）；与空草稿常显面板（Item1）配合：有节点即可建首段
         b分割.disabled = b删除.disabled = b启用.disabled = b全启.disabled = b全不启.disabled = 忙 || !有段;
         概要El = document.createElement("span"); 概要El.className = "lvp-ct-概要";
-        工具.append(b新建, b分割, b删除, b启用, b全启, b全不启);
+        工具.append(b新建, b分割, b删除, b启用, b全启, b全不启, b台词);
         根.appendChild(工具);
 
         // 生成行（技能/辅助/模型 + AI生成提示词 + 填充节点）：持久元素，只建一次（C1）
@@ -855,7 +896,8 @@ export function 创建剪辑时间轴(容器, ctx) {
 
         插入线 = document.createElement("div"); 插入线.className = "lvp-ct-插入线"; 插入线.style.display = "none";
 
-        // Item1：草稿为空也常显时间轴面板（时间线+轨道），不再退回整块空态；0 段时为纯空轨道。
+        // Item1：草稿为空也常显时间轴面板（刻度尺+轨道），不退回整块空态、不放提示文字；
+        // 0 段时刻度按 空轨刻度秒 保底铺出（2026-09-24 修复「剪辑时间轴不显示」＝刷时间线 总≤0 早退致刻度带空白）。
         时间线El = document.createElement("div"); 时间线El.className = "lvp-ct-时间线";
         时间线El.addEventListener("pointerdown", 起平移);
         const 轨 = document.createElement("div"); 轨.className = "lvp-ct-轨道";

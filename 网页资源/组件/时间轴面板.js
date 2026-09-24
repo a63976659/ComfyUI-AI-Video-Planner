@@ -6,6 +6,7 @@ import { 真源, 取widget, 解析段素材, 查找共用素材 } from "./桥接
 import { 任务码 } from "./生成类型选择.js";
 import { app } from "../../../scripts/app.js";
 import { 创建缓存面板 } from "./缓存面板.js";
+import { 分配中间帧 } from "./中间帧.js";
 
 const 面板高 = 210;   // 时间轴最小高（弹性布局下限 --comfy-widget-min-height）；节点拉高时自动增大填满
 const 节点默认宽 = 420;   // 画布节点最小默认宽，避免 widget 拥挤
@@ -40,7 +41,8 @@ function 注入样式() {
       .lvp-时间轴 *{box-sizing:border-box}
 
       /* ── 工具条 ───────────────────────────────────────── */
-      .lvp-tl-工具{display:flex;align-items:center;gap:4px;flex:0 0 auto;flex-wrap:wrap}
+      .lvp-tl-工具{display:flex;align-items:center;gap:4px;flex:0 0 auto;min-width:0;overflow-x:auto}
+      .lvp-tl-工具>*{flex-shrink:0}
       .lvp-tl-钮{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;line-height:1.35;border-radius:6px;
         border:1px solid var(--tl-line2);background:linear-gradient(180deg,var(--comfy-menu-bg,#2c2f35),var(--comfy-menu-secondary-bg,#23262b));
         color:var(--tl-txt);font:inherit;cursor:pointer;white-space:nowrap;
@@ -329,13 +331,14 @@ export function 挂载时间轴(node, 面板) {
     }
 
     // 工具条「渐变过渡」开关：真源是节点隐藏 widget「尾帧锚定」（布尔），此处仅读写它。
-    // 开启→执行核心沿用默认上下文帧数(22)、以上一段尾帧/尾音频锚入下一段（段间连续），
-    //   且接缝处做 4 帧交叉淡化；关闭→上下文帧数=0、各段独立生成、接缝硬切（不做任何过渡）。
+    // 开启→执行核心沿用默认上下文帧数(22)、以上一段尾帧 latent + 约 1 秒尾音频做续拍条件
+    //   锚入下一段（段间连续），接缝零重叠硬切、只对续拍段开头做低频色光衔接；
+    //   关闭→上下文帧数=0、各段独立生成、接缝硬切（不做任何过渡）。
     // 每次 渲染() 现读 widget 值，故与节点状态恒同步。
     function 建锚定开关() {
         const 标 = document.createElement("label");
         标.className = "lvp-tl-锚";
-        标.title = "渐变过渡：开启则把上一段尾帧/尾音频锚入下一段（官方 AddGuide）并在接缝处做 4 帧交叉淡化，实现段间平滑过渡；关闭则各段独立生成、接缝硬切、不做任何过渡处理（写入节点隐藏 widget「尾帧锚定」）";
+        标.title = "渐变过渡：开启则把上一段尾帧画面与约 1 秒尾音频作为续拍条件锚入下一段（官方 AddGuide 同款 latent 直传），接缝零重叠硬切、只对续拍段开头做低频色光衔接；关闭则各段独立生成、接缝硬切、不做任何过渡处理（写入节点隐藏 widget「尾帧锚定」）";
         标.onclick = (e) => e.stopPropagation();
         const cb = document.createElement("input");
         cb.type = "checkbox"; cb.checked = 真源.读尾帧锚定(node);
@@ -688,8 +691,16 @@ export function 挂载时间轴(node, 面板) {
             const 段组 = 读段();
             const i = 选中(); const s = 段组[i]; if (!s) return;
             const 中 = s.start + (s.end - s.start) / 2;
-            段组.splice(i + 1, 0, { ...s, start: 中, refs: 深拷refs(s.refs) });
-            段组[i] = { ...s, end: 中, refs: 深拷refs(s.refs) };
+            let 子段;
+            try {
+                子段 = 分配中间帧(s, [
+                    { ...s, end: 中, refs: 深拷refs(s.refs) },
+                    { ...s, start: 中, refs: 深拷refs(s.refs) },
+                ]);
+            } catch (e) {
+                return app.extensionManager.dialog.confirm({ title: "无法裁剪", message: e.message }).catch(() => {});
+            }
+            段组.splice(i, 1, ...子段);
             写段(段组);
         });
         const 全选 = 建钮("全选运行", "", "所有段都参与生成", () => { const 段组 = 读段(); 段组.forEach((s) => (s.run = true)); 写段(段组); });
