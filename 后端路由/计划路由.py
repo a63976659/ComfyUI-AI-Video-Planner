@@ -177,6 +177,10 @@ def 过滤缺失素材(数据: dict) -> tuple:
     if isinstance(时间轴, dict) and isinstance(时间轴.get("segments"), list):
         _过滤段refs(时间轴["segments"], 池, 缺失)   # 只登记，不改数据
 
+    草稿 = 数据.get("剪辑草稿")
+    if isinstance(草稿, dict):
+        _过滤段refs(草稿.get("segments"), 池, 缺失)
+
     # 缺失清单去重保序（同名文件被多段引用时只 toast 一次）
     见 = set()
     去重 = []

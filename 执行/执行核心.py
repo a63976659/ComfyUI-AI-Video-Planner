@@ -18,9 +18,13 @@
 
 本模块是编排层：串起 规划 / 条件组装 / 参考素材 / 采样与解码 / 段间连续 / 段缓存 / 官方管线适配 /
 显存清理。GPU 主验证在 Task 19/20；CPU 侧只做静态语法 + 纯函数/编排桩测。
+
+可选路径：连上 节点/SelfLift配置 后，_采样段 改走 渐进采样.渐进采样段（低清前缀 k 步 → latent
+抬升 → 高清剩余步，总前向数仍 == 步数）；未连接时上面的官方单段链路一字不变。
 """
 import itertools
 import logging
+import math
 import time
 
 from .规划 import 解析时间轴
@@ -30,10 +34,17 @@ from .采样与解码 import 对齐画布, 解码音视频, 秒转帧数, FPS, C
 # ⚠️ _latent_t_转帧数 带下划线只表示「不是 段间连续 的对外 API」，同包内借用无妨：_是采样产物
 # 要用它做「缓存里的 帧数 与 latent 时长是否同源」的自洽校验（官方 FRAME_PER_TOKEN 累加式的逆换算）。
 from .段间连续 import (裁前缀帧数, 默认上下文帧数, 取尾帧_latent, 钉入上下文_from_latent,
-                    流式拼接, 预算总帧数, _latent_t_转帧数,
-                    默认音频上下文帧数, 续拍算法标识, 验证宿主续拍条件, 匹配开头色光)
+                    流式拼接, 预算总帧数, _latent_t_转帧数, _校验视频latent, _校验来源音频latent,
+                    默认音频上下文帧数, 续拍算法标识, 验证宿主续拍条件, 匹配开头色光,
+                    缩放视频latent空间)
 from .段缓存 import 段指纹, 读缓存, 写缓存, 缓存统计
+from .初采产物 import 记录初采段, 组装初采产物
 from .官方管线适配 import 调用节点
+# SelfLift 渐进分辨率采样（可选路径）：门控/取维度 用别名点明归属，采样函数按本名调用。
+# ⚠️ H3潜空间放大 的 预检H3放大权重 在 _预检渐进采样 内惰性 import（它经 后处理缓存 →
+#   精修条件 绕回本模块，模块级引入即循环导入；详见 渐进采样 模块头）。
+from .渐进采样 import (渐进采样段, 校验配置 as _校验渐进配置,
+                       自定义链缺失 as _渐进自定义链缺失, 指纹维度 as _渐进指纹维度)
 from .显存清理 import 清理显存
 from .模型缓存 import 取模型, 清缓存
 
@@ -50,7 +61,8 @@ _拼接重叠帧数 = 0
 def _计时开启():
     """诊断计时开关：环境变量 H3_计时 为真值（1/true/yes/on）时启用，默认关闭。
 
-    开启后 _采样段 每段以 info 级输出 ①参考解码 / ②条件节点 / ③段间连续 / ④KSampler 四步耗时、
+    开启后 _采样段 每段以 info 级输出 ①参考解码 / ②条件节点 / ③段间连续 / ④采样（普通路径即
+    KSampler；连了 SelfLift配置 则另附一行「低清条件/低清采样/抬升/高清采样」细分）四步耗时、
     _解码段 每段输出 ⑤AV解码 耗时，用于定位「模型初始化久」到底是首段的模型加载（②④ 首段偏大）、
     后续段的采样计算（④ 后续段），还是参考素材解码（①）/ 解码显存乒乓（⑤）。
 
@@ -555,6 +567,8 @@ def _预检数值与时长(段列表, 全局参数):
         if 键 in 全局参数 and not _有限(全局参数[键]):
             raise ValueError(f"参数「{键}」必须是有限数值，收到 {全局参数[键]!r}")
     上下文 = int(全局参数.get("上下文帧数", 默认上下文帧数))
+    if 0 < 上下文 < 5:
+        raise ValueError("上下文帧数不支持 1–4 帧：完整视频的尾 token 无法按单帧续拍；请设为 0 关闭或至少 5 帧")
     计划时长 = 0.0
     for seg in 段列表:
         if not seg.run:
@@ -602,6 +616,47 @@ def _预检官方节点(管线集, 需要音频):
     if 缺:
         raise ValueError(
             f"缺少官方节点：{', '.join(缺)}（请确认 ComfyUI 官方 MiniMax H3 节点包已安装并注册到 NODE_CLASS_MAPPINGS）")
+
+
+def _预检渐进采样(全局参数, 段列表):
+    """SelfLift 渐进分辨率采样的采样前门控（整轮一次）→ (_采样段 的 渐进 入参, 指纹维度)；不适用返回 (None, None)。
+
+    两种返回 None 的情形（= 走普通单阶段 KSampler，与未接入本功能时逐字节同路径）：
+      • 未连接 SelfLift配置；
+      • 本 run 没有任何 run 段（全 skip / 全命中缓存）——不采样就不该被「采样器不是 euler」
+        这类配置错误挡住缓存复用（与 _预检素材、_预检数值与时长 只校 run 段同口径）。
+
+    连了配置则一律 ValueError 点名，绝不静默回退普通路径：静默回退会让用户以为在跑加速版
+    而实际跑全清，A/B 对照数据也就不可信。
+    权重摘要 由 预检H3放大权重 哈希整个 safetensors 得到 —— 故只在本门控里做一次，
+    经 渐进 字典带下去逐段复用，不进段循环（逐段哈希大文件是纯浪费）。"""
+    配置 = 全局参数.get("selflift")
+    if 配置 is None or not any(seg.run for seg in 段列表):
+        return None, None
+    # 与 _预检官方节点 同口径的 best-effort 降级：注册表不可读、或连哨兵 VAEDecode 都缺失
+    # （= comfy_extras 未加载的裸导入环境，如单测）时跳过 —— 那时 官方节点可用 对每个名字
+    # 都返回 False，点名毫无意义；真正运行时缺才是真缺。
+    映射 = _官方节点注册表()
+    if 映射 is not None and "VAEDecode" in 映射:
+        缺 = _渐进自定义链缺失()
+        if 缺:
+            raise ValueError(
+                f"渐进采样需要宿主自定义采样链节点：{', '.join(缺)}"
+                f"（请确认 ComfyUI 的 nodes.py 与 comfy_extras/nodes_custom_sampler.py 已加载注册）")
+    低宽, 低高, 切换步 = _校验渐进配置(
+        配置, 采样器=全局参数.get("采样器", "res_multistep"),
+        步数=int(全局参数.get("步数", 20)),
+        宽=int(全局参数.get("宽", 1344)), 高=int(全局参数.get("高", 768)))
+    权重信息 = None
+    if 配置.get("放大权重") is not None:
+        from .H3潜空间放大 import 预检H3放大权重   # 惰性：见模块头循环导入说明
+        权重信息 = 预检H3放大权重(配置["放大权重"])
+    # 尾块 latent 尺寸：官方 _empty_av_latent 用 h//16、w//16，而 低宽/低高 已由 低清画布 保证
+    # 是 CANVAS_MULTIPLE(32) 的倍数，故此处整除无余。
+    渐进 = {"低宽": 低宽, "低高": 低高, "切换步": 切换步,
+            "尾帧latent尺寸": (低高 // 16, 低宽 // 16),
+            "权重信息": 权重信息, "允许插值降级": bool(配置.get("允许插值降级"))}
+    return 渐进, _渐进指纹维度(配置, None if 权重信息 is None else 权重信息.get("digest"))
 
 
 def _解析参考张量(refs, 媒体根, prompt=None, 音频窗=None):
@@ -735,14 +790,20 @@ def 提取模型链身份(模型输入, 用到槽):
     return 身份
 
 
-def 构建采样参数(全局参数, 共用素材非空, audio_vae存在, 上下文帧数, 模型链身份, 缓存失效版本):
+def 构建采样参数(全局参数, 共用素材非空, audio_vae存在, 上下文帧数, 模型链身份, 缓存失效版本,
+                selflift维度=None):
     """段缓存指纹的**全局依赖**描述（纯函数，JSON-safe）。作 段指纹 的 全局参数 入参。
 
     ⚠️ 刻意**不含「帧率」**：官方采样时基恒 FPS=24，用户「帧率」只是输出容器/封装元数据，
     不参与 秒转帧数 的帧数换算（见 采样与解码.秒转帧数）。旧版把它放进本字典 → 只改播放 fps
     也会整体作废段缓存、白白重采样（规格 §B-5）。宽/高 影响采样画布与 latent 形状，故保留。
-    「缓存失效版本」与「模型链身份」是本 run 的作废/换型手段：任一变化 → 全部段指纹变（§B-2）。"""
-    return {
+    「缓存失效版本」与「模型链身份」是本 run 的作废/换型手段：任一变化 → 全部段指纹变（§B-2）。
+
+    selflift维度（渐进采样.指纹维度 的产物）只在**连了 SelfLift配置 时**才添键：未连接也塞
+    None 会让所有既有段缓存的 全局参数 JSON 多出一维 → 指纹全变 → 白白重采样一轮。
+    连接态则相反：低清缩放/高清步数/放大权重任一变化必须使指纹变化（否则会把低清前缀采出的
+    latent 当普通全清采样的结果命中）。"""
+    参数 = {
         "宽": int(全局参数.get("宽", 1344)),
         "高": int(全局参数.get("高", 768)),
         "种子": int(全局参数.get("种子", 0)),
@@ -760,6 +821,9 @@ def 构建采样参数(全局参数, 共用素材非空, audio_vae存在, 上下
         "模型链身份": 模型链身份,
         "缓存失效版本": 缓存失效版本,
     }
+    if selflift维度 is not None:
+        参数["selflift"] = selflift维度
+    return 参数
 
 
 def 构建段指纹源(seg, 素材摘要, 被锚定, 锚帧数, 前段指纹, 上下文帧数):
@@ -781,7 +845,8 @@ def 构建段指纹源(seg, 素材摘要, 被锚定, 锚帧数, 前段指纹, �
             "被锚定": bool(被锚定),
             "锚帧数": int(锚帧数),
             "前段指纹": (前段指纹 if 被锚定 else None),
-            "上下文帧数": int(上下文帧数)}
+            "上下文帧数": int(上下文帧数),
+            "i2v比例模式": getattr(seg, "i2v比例模式", "裁剪")}
 
 
 def _内容摘要器():
@@ -793,7 +858,7 @@ def _内容摘要器():
     return 内容摘要
 
 
-def _素材摘要(refs, 媒体根, 摘要缓存):
+def _素材摘要(refs, 媒体根, 摘要缓存, task):
     """把本段实际消费的素材文件（解析槽位 的 图片/音频/视频 + 首帧/尾帧/中间帧字符串）映射为内容摘要。
 
     顺序与 解析槽位 同源（不排序/去重），使摘要与 <Picture N> 标签一一对照；同一路径的摘要按 摘要缓存
@@ -820,10 +885,36 @@ def _素材摘要(refs, 媒体根, 摘要缓存):
         if 名单:
             项[类] = [_摘(n) for n in 名单]
     for 键 in ("首帧", "尾帧", "中间帧"):
+        if 键 == "中间帧" and not 需要尾帧(task):
+            continue
         值 = (refs or {}).get(键)
         if isinstance(值, str) and 值:
             项[键] = _摘(值)
     return 项
+
+
+def _初采素材(seg, 媒体根, 摘要缓存):
+    refs = dict(seg.refs or {})
+    assets = []
+
+    def 记录(slot, ordinal, name):
+        path = _绝对路径(name, 媒体根)
+        digest = 摘要缓存.get(path)
+        if not isinstance(digest, str) or not digest or digest.startswith("<"):
+            digest = None
+        assets.append({"slot": slot, "ordinal": ordinal, "path": path, "digest": digest})
+        return path
+
+    if 选模型槽(seg.task) == "ref2va":
+        for slot, names in 解析槽位(refs).items():
+            refs[slot] = [记录(slot, i, name) for i, name in enumerate(names)]
+    else:
+        for slot, enabled in (("首帧", 需要首帧(seg.task)), ("尾帧", 需要尾帧(seg.task)),
+                              ("中间帧", 需要尾帧(seg.task))):
+            value = refs.get(slot)
+            if enabled and isinstance(value, str) and value:
+                refs[slot] = 记录(slot, 0, value)
+    return refs, assets
 
 
 def _人类字节(字节: int) -> str:
@@ -894,8 +985,8 @@ def _指纹摘要(名, 媒体根):
     return d
 
 
-def _外部依赖指纹(时间轴数据, 媒体根, 缓存失效版本=0):
-    """汇总「时间轴各段实际引用的素材文件内容摘要」→ 一个稳定短哈希，供 fingerprint_inputs 用。
+def _外部依赖指纹(时间轴数据, 媒体根, 缓存失效版本=0, 参考素材=None):
+    """汇总各段引用与全局素材池的文件内容摘要，供 fingerprint_inputs 用。
 
     收集范围与 _素材摘要 同源（解析槽位 的图片/音频/视频 + 首帧/尾帧/中间帧字符串），覆盖**所有**段
     （不分 run/skip）：skip 段素材变了也重跑，但那轮 run 段仍命中磁盘缓存（重跑＝秒级读缓存），
@@ -909,6 +1000,15 @@ def _外部依赖指纹(时间轴数据, 媒体根, 缓存失效版本=0):
         段组 = 数据.get("segments") if isinstance(数据, dict) else None
     except Exception:  # noqa: BLE001 - 编辑中间态/坏 JSON 走占位，绝不抛（详上）
         段组 = None
+    try:
+        全局素材 = json.loads(参考素材) if isinstance(参考素材, str) else 参考素材
+    except (ValueError, TypeError):
+        全局素材 = None
+    if isinstance(全局素材, dict):
+        # 全局池可能经回退或共用生效，保守收集避免宿主跳过执行层的段缓存检查。
+        段组 = 段组 if isinstance(段组, list) else []
+        有首尾帧段 = any(isinstance(s, dict) and 需要尾帧(str(s.get("task") or "t2v")) for s in 段组)
+        段组 = [*段组, {"task": "fl2v" if 有首尾帧段 else "t2v", "refs": 全局素材}]
     if isinstance(段组, list):
         for seg in 段组:
             refs = seg.get("refs") if isinstance(seg, dict) else None
@@ -923,6 +1023,8 @@ def _外部依赖指纹(时间轴数据, 媒体根, 缓存失效版本=0):
                     if isinstance(n, str) and n:
                         名集.add(n)
             for 键 in ("首帧", "尾帧", "中间帧"):
+                if 键 == "中间帧" and not 需要尾帧(str(seg.get("task") or "t2v")):
+                    continue
                 值 = refs.get(键)
                 if isinstance(值, str) and 值:
                     名集.add(值)
@@ -961,58 +1063,68 @@ def _建_av_latent(video_latent, audio_latent):
     return {"samples": NestedTensor(张量)}
 
 
-def _采样段(seg, 全局参数, 模型输入, 尾帧_video, 尾帧_audio, 锚帧数, 媒体根, *, 音频结束坐标=None):
-    """方案 B Phase 1：走官方 H3 链路跑到 KSampler 为止，返回 CPU 上的 AV latent（不解码）。
+def _比例宽高(图像宽, 图像高, 百万像素):
+    """图像原始宽高 → 取整到 CANVAS_MULTIPLE 得比例 → 结合百万像素预算算出输出画布 (宽, 高)。"""
+    倍数 = CANVAS_MULTIPLE
+    a = max(倍数, round(图像宽 / 倍数) * 倍数)
+    b = max(倍数, round(图像高 / 倍数) * 倍数)
+    总像素 = float(百万像素) * 1024 * 1024
+    缩放 = math.sqrt(总像素 / (a * b))
+    宽 = max(倍数, round(a * 缩放 / 倍数) * 倍数)
+    高 = max(倍数, round(b * 缩放 / 倍数) * 倍数)
+    return 宽, 高
 
-    帧数一律经 秒转帧数 拿（→ 对齐帧数(round(秒*FPS=24))）：官方模型时间基座恒 FPS=24，
-    与用户 widget「帧率」解耦（后者只影响输出容器 fps 标签，不参与帧数换算）。详见
-    采样与解码.秒转帧数 docstring 与 Task 4 §接口约束。
 
-    尾帧_video/尾帧_audio/锚帧数 由 执行时间轴 从上一段产物经 取尾帧_latent 取得后传入：
-    锚帧数 同时是段缓存指纹的一维，「指纹算的」与「真锚的」必须是同一个值，故不在本函数内重算。
+def _居中裁剪到比例(图像, 目标宽, 目标高):
+    """[B,H,W,C] 图像张量按目标宽高比做最大面积居中裁剪；比例已匹配则原样返回。"""
+    if 图像 is None:
+        return 图像
+    _, H, W, _ = 图像.shape
+    目标比例 = 目标宽 / 目标高
+    当前比例 = W / H
+    if abs(当前比例 - 目标比例) < 1e-6:
+        return 图像
+    if 当前比例 > 目标比例:
+        裁后W = min(int(round(H * 目标比例)), W)
+        x0 = (W - 裁后W) // 2
+        return 图像[:, :, x0:x0 + 裁后W, :]
+    else:
+        裁后H = min(int(round(W / 目标比例)), H)
+        y0 = (H - 裁后H) // 2
+        return 图像[:, y0:y0 + 裁后H, :, :]
 
-    返回: {"video_latent": Tensor(cpu), "audio_latent": Tensor(cpu)|None,
-           "锚帧数": int, "帧数": int, "index": int}
-    —— 纯张量 + 标量，可直接 torch.save/load(weights_only=True)（见 _拆_av_latent）。"""
-    帧数 = 秒转帧数(seg.end - seg.start)
-    中间比例 = _中间帧比例(seg)
-    if 中间比例 is not None:
-        # 比例定位于裁锚后的可见段，接缝混合仍由既有拼接流程处理。
-        裁 = 裁前缀帧数(帧数, 锚帧数 if 尾帧_video is not None else 0)
-        if 帧数 - 裁 < 3:
-            raise ValueError(f"段{seg.index + 1} 中间帧无可用内部位置，请加长该段或移除中间帧")
-        中间帧号 = max(裁 + 1, min(帧数 - 2, 裁 + round((帧数 - 裁 - 1) * 中间比例)))
-    计时 = _计时开启()                     # 诊断计时开关（环境变量 H3_计时，默认关，见 _计时开启）
-    时刻0 = time.perf_counter()            # ① 参考解码起点（含全局参数读取 + 下方 if/else 里的素材加载）
-    # 主画布**原样透传** 分辨率到宽高 的产出，不过 对齐画布：官方 adapt_canvas 的唯一调用点是
-    # MiniMaxH3ReferenceToVideo.execute L319 的参考视频循环（只规范参考视频），主画布走
-    # _empty_av_latent(width, height, length) → torch.zeros([B,24,latent_t,h//16,w//16]) 直接用
-    # 用户值。此前多过一次 adapt_canvas 会抹平「百万像素」预算（短边恒 768 → 16:9 下 0.4MP 与
-    # 1.0MP 产物几乎同尺寸，9:16+0.4MP 本该 480x864 却被托到 768x1376）。
-    # 合法性由上游保证：分辨率到宽高 的 multiple=CANVAS_MULTIPLE(32) → 宽高必为 32 倍数且 ≥32
-    # （latent 取 h//16，32 倍数是硬要求）；面积上限则由「百万像素」widget 的 max 兜。
-    # ⚠️ 对齐画布 仍被 _参考视频画布 使用（L211），删本行不等于删 import。
-    宽, 高 = int(全局参数.get("宽", 1344)), int(全局参数.get("高", 768))
-    model, clip, vae = 模型输入["model"], 模型输入["clip"], 模型输入["vae"]
-    audio_vae = 模型输入.get("audio_vae")
 
-    # 1) SigmaShift 补丁模型：由 执行时间轴 在段循环外算好后经 模型输入["model_p"] 传入（A）。
-    #    键不存在 = 直调本函数的单测/外部路径 → 就地补算，行为与旧版一致。
-    model_p = 模型输入["model_p"] if "model_p" in 模型输入 else _补丁模型(model, 全局参数)
+def _构建段条件(*, seg, 全局参数, 模型输入, 媒体根, 帧数, 宽, 高,
+                尾帧_video, 尾帧_audio, 锚帧数, 音频结束坐标, 中间帧号, 尾帧latent尺寸=None):
+    """按 宽/高 画布组装本段 positive 条件 + AV 空 latent（①参考素材解码 → ②条件节点 → ③段间连续）。
 
-    # 2) 条件节点：产 positive 条件 + AV 空 latent（官方只输出 positive）
+    从 _采样段 原样拆出（普通路径的语句顺序不变），唯一新增入参是 尾帧latent尺寸：渐进采样
+    的低清阶段传入**低清** latent 尺寸，把上一段尾块先降采样再锚入。官方条件节点与
+    MiniMaxH3AddGuide 都从传入的 width/height/latent 推导画布，故首/尾帧与参考图天然拿到
+    低清版本，不需要另写缩放；但尾块是上一段**高清** latent 的切片，不降尺寸会被
+    钉入上下文_from_latent 的空间校验直接拒绝。
+
+    返回 (positive, latent, 时刻1, 时刻2, 时刻3)：三个时刻是 ①②③ 的边界，由 _采样段 与
+    时刻0/时刻4 拼成首尾相接的计时口径（①+②+③+④ == 合计，见 _计时开启 docstring）。"""
     管线 = 选管线(seg.task)
     if 管线 == "MiniMaxH3ImageToVideo":
-        kw = dict(clip=clip, vae=vae, prompt=seg.prompt, width=宽, height=高, length=帧数)
         首 = _确保图像(seg.refs.get("首帧"), 媒体根)
         尾 = _确保图像(seg.refs.get("尾帧"), 媒体根)
+        模式 = getattr(seg, "i2v比例模式", "裁剪")
+        # 比例模式仅作用于纯 i2v（需要首帧、不需要尾帧）：fl2v 的首/尾帧必须维持旧的整帧拉伸
+        # 语义——只裁首帧会让首/尾覆盖区域错位，morphing 出现跳变。
+        if (模式 == "裁剪" and 首 is not None
+                and 需要首帧(seg.task) and not 需要尾帧(seg.task)):
+            首 = _居中裁剪到比例(首, 宽, 高)
+        kw = dict(clip=模型输入["clip"], vae=模型输入["vae"], prompt=seg.prompt,
+                  width=宽, height=高, length=帧数)
         if 需要首帧(seg.task) and 首 is not None:
             kw["first_frame"] = 首
         if 需要尾帧(seg.task) and 尾 is not None:
             kw["last_frame"] = 尾
     else:  # MiniMaxH3ReferenceToVideo
-        kw = dict(clip=clip, vae=vae, audio_vae=audio_vae, prompt=seg.prompt,
-                  width=宽, height=高, length=帧数,
+        kw = dict(clip=模型输入["clip"], vae=模型输入["vae"], audio_vae=模型输入.get("audio_vae"),
+                  prompt=seg.prompt, width=宽, height=高, length=帧数,
                   ref_image_size=全局参数.get("参考图尺寸", "match"))
         # B（并入「全段共用」）：参考共用 ON 时每段只引用自己 [start,end) 那段参考音频
         # （按全局时间轴切片）；OFF 时 音频窗=None → 整段引用（现状不变）。start/end 与
@@ -1025,26 +1137,111 @@ def _采样段(seg, 全局参数, 模型输入, 尾帧_video, 尾帧_audio, 锚�
 
     # 3) 段间连续：把上段尾帧 latent 锚到本段 frame_idx=0（等价官方 AddGuide，免 encode 往返）
     if 尾帧_video is not None:
-        positive = 钉入上下文_from_latent(positive, latent, 尾帧_video, 尾帧_audio, 锚帧数,
+        锚视频 = 尾帧_video
+        if 尾帧latent尺寸 is not None:
+            锚视频 = 缩放视频latent空间(尾帧_video, 尾帧latent尺寸[0], 尾帧latent尺寸[1])
+        positive = 钉入上下文_from_latent(positive, latent, 锚视频, 尾帧_audio, 锚帧数,
                                          frame_idx=0, 音频结束坐标=音频结束坐标)
-    if 中间比例 is not None:
+    if 中间帧号 is not None:
         positive = 调用节点("MiniMaxH3AddGuide", positive=positive, latent=latent,
-                            frame_idx=中间帧号, vae=vae,
+                            frame_idx=中间帧号, vae=模型输入["vae"],
                             image=_确保图像(seg.refs["中间帧"], 媒体根))[0]
     时刻3 = time.perf_counter()            # ③ 段间连续止
+    return positive, latent, 时刻1, 时刻2, 时刻3
 
-    # 4) KSampler：cfg=1.0 → negative 被忽略，故 negative 复用 positive；
+
+def _采样段(seg, 全局参数, 模型输入, 尾帧_video, 尾帧_audio, 锚帧数, 媒体根, *,
+            音频结束坐标=None, 渐进=None):
+    """方案 B Phase 1：走官方 H3 链路跑到采样器为止，返回 CPU 上的 AV latent（不解码）。
+
+    帧数一律经 秒转帧数 拿（→ 对齐帧数(round(秒*FPS=24))）：官方模型时间基座恒 FPS=24，
+    与用户 widget「帧率」解耦（后者只影响输出容器 fps 标签，不参与帧数换算）。详见
+    采样与解码.秒转帧数 docstring 与 Task 4 §接口约束。
+
+    尾帧_video/尾帧_audio/锚帧数 由 执行时间轴 从上一段产物经 取尾帧_latent 取得后传入：
+    锚帧数 同时是段缓存指纹的一维，「指纹算的」与「真锚的」必须是同一个值，故不在本函数内重算。
+
+    渐进 为 _预检渐进采样 的产物时改走 SelfLift 三阶段（低清 k 步 → latent 抬升 → 高清剩余步）：
+    两阶段的条件/空 latent 各按自身画布建一份（见 _构建段条件）。None = 官方单阶段 KSampler，
+    调用序列与本函数改动前逐字节相同。
+
+    返回: {"video_latent": Tensor(cpu), "audio_latent": Tensor(cpu)|None,
+           "锚帧数": int, "帧数": int, "index": int}
+    —— 纯张量 + 标量，可直接 torch.save/load(weights_only=True)（见 _拆_av_latent）。"""
+    帧数 = 秒转帧数(seg.end - seg.start)
+    中间比例 = _中间帧比例(seg)
+    中间帧号 = None
+    if 中间比例 is not None:
+        # 比例定位于裁锚后的可见段，接缝混合仍由既有拼接流程处理。
+        裁 = 裁前缀帧数(帧数, 锚帧数 if 尾帧_video is not None else 0)
+        if 帧数 - 裁 < 3:
+            raise ValueError(f"段{seg.index + 1} 中间帧无可用内部位置，请加长该段或移除中间帧")
+        中间帧号 = max(裁 + 1, min(帧数 - 2, 裁 + round((帧数 - 裁 - 1) * 中间比例)))
+    计时 = _计时开启()                     # 诊断计时开关（环境变量 H3_计时，默认关，见 _计时开启）
+    时刻0 = time.perf_counter()            # ① 参考解码起点（含全局参数读取 + 条件组装里的素材加载）
+    # 主画布**原样透传** 分辨率到宽高 的产出，不过 对齐画布：官方 adapt_canvas 的唯一调用点是
+    # MiniMaxH3ReferenceToVideo.execute L319 的参考视频循环（只规范参考视频），主画布走
+    # _empty_av_latent(width, height, length) → torch.zeros([B,24,latent_t,h//16,w//16]) 直接用
+    # 用户值。此前多过一次 adapt_canvas 会抹平「百万像素」预算（短边恒 768 → 16:9 下 0.4MP 与
+    # 1.0MP 产物几乎同尺寸，9:16+0.4MP 本该 480x864 却被托到 768x1376）。
+    # 合法性由上游保证：分辨率到宽高 的 multiple=CANVAS_MULTIPLE(32) → 宽高必为 32 倍数且 ≥32
+    # （latent 取 h//16，32 倍数是硬要求）；面积上限则由「百万像素」widget 的 max 兜。
+    # ⚠️ 对齐画布 仍被 _参考视频画布 使用，删本行不等于删 import。
+    宽, 高 = int(全局参数.get("宽", 1344)), int(全局参数.get("高", 768))
+    # i2v "原图"模式：用首帧宽高比 + 百万像素预算覆盖本段画布尺寸（全局输出分辨率不生效）。
+    # 仅纯 i2v（需要首帧、不需要尾帧）——fl2v 吃两帧、宽高比可能相异，按首帧比例会错配尾帧。
+    if (需要首帧(seg.task) and not 需要尾帧(seg.task)
+            and getattr(seg, "i2v比例模式", "裁剪") == "原图"):
+        首帧路径 = (seg.refs or {}).get("首帧")
+        if 首帧路径 is not None:
+            _首 = _确保图像(首帧路径, 媒体根)
+            if _首 is not None:
+                _, _ih, _iw, _ = _首.shape
+                宽, 高 = _比例宽高(_iw, _ih, 全局参数.get("百万像素", 0.4))
+    model = 模型输入["model"]
+
+    # 1) SigmaShift 补丁模型：由 执行时间轴 在段循环外算好后经 模型输入["model_p"] 传入（A）。
+    #    键不存在 = 直调本函数的单测/外部路径 → 就地补算，行为与旧版一致。
+    model_p = 模型输入["model_p"] if "model_p" in 模型输入 else _补丁模型(model, 全局参数)
+
+    # 2)+3) 目标画布的条件与 AV 空 latent（含参考解码、段间锚定、中间帧 guide）
+    positive, latent, 时刻1, 时刻2, 时刻3 = _构建段条件(
+        seg=seg, 全局参数=全局参数, 模型输入=模型输入, 媒体根=媒体根, 帧数=帧数, 宽=宽, 高=高,
+        尾帧_video=尾帧_video, 尾帧_audio=尾帧_audio, 锚帧数=锚帧数,
+        音频结束坐标=音频结束坐标, 中间帧号=中间帧号)
+
+    # 4) 采样：cfg=1.0 → negative 被忽略，故 negative 复用 positive；
     #    采样器/调度器 由节点 widget 经 全局参数 传入（默认 res_multistep/simple 与历史硬编码一致）。
     if 尾帧_video is not None:
         验证宿主续拍条件(model_p)
-    sampled = 调用节点("KSampler", model=model_p,
-                       seed=int(全局参数.get("种子", 0)) + seg.index,
-                       steps=int(全局参数.get("步数", 20)), cfg=1.0,   # fallback 与 长视频规划师「步数」default 同步
-                       sampler_name=全局参数.get("采样器", "res_multistep"),
-                       scheduler=全局参数.get("调度器", "simple"),
-                       positive=positive, negative=positive,
-                       latent_image=latent, denoise=1.0)[0]
-    时刻4 = time.perf_counter()            # ④ KSampler 止（首段含 DiT 加载，后续段为纯采样计算）
+    渐进计 = None
+    低清条件秒 = 0.0
+    种子 = int(全局参数.get("种子", 0)) + seg.index
+    if 渐进 is None:
+        sampled = 调用节点("KSampler", model=model_p,
+                           seed=种子,
+                           steps=int(全局参数.get("步数", 20)), cfg=1.0,   # fallback 与 长视频规划师「步数」default 同步
+                           sampler_name=全局参数.get("采样器", "res_multistep"),
+                           scheduler=全局参数.get("调度器", "simple"),
+                           positive=positive, negative=positive,
+                           latent_image=latent, denoise=1.0)[0]
+    else:
+        # 低清阶段的条件按 低宽/低高 另建一份；素材经 _取缓存 复用（参考共用 ON 时），未启用
+        # 作用域时首/尾帧会多解码一次（图像级毫秒开销，换掉的是整段 k 步的低清采样）。
+        低清起点 = time.perf_counter()
+        低清条件, 低清latent = _构建段条件(
+            seg=seg, 全局参数=全局参数, 模型输入=模型输入, 媒体根=媒体根, 帧数=帧数,
+            宽=渐进["低宽"], 高=渐进["低高"], 尾帧_video=尾帧_video, 尾帧_audio=尾帧_audio,
+            锚帧数=锚帧数, 音频结束坐标=音频结束坐标, 中间帧号=中间帧号,
+            尾帧latent尺寸=渐进["尾帧latent尺寸"])[:2]
+        低清条件秒 = time.perf_counter() - 低清起点
+        sampled, 渐进计 = 渐进采样段(
+            低清条件=低清条件, 低清latent=低清latent, 高清条件=positive, 高清latent=latent,
+            模型=model_p, 调度器=全局参数.get("调度器", "simple"),
+            步数=int(全局参数.get("步数", 20)), 种子=种子, 切换步=渐进["切换步"],
+            目标宽=宽, 目标高=高, 权重信息=渐进["权重信息"],
+            允许插值降级=渐进["允许插值降级"])
+    时刻4 = time.perf_counter()            # ④ 采样止（首段含 DiT 加载，后续段为纯采样计算）
 
     # 5) 拆嵌套 + 搬 CPU：latent 要跨整轮存活（Phase 2 才解码），留在显存里 N 段就把方案 B
     #    省下的空间吃回去；且段缓存落盘必须是纯张量（weights_only=True 不认 NestedTensor）。
@@ -1061,9 +1258,17 @@ def _采样段(seg, 全局参数, 模型输入, 尾帧_video, 尾帧_audio, 锚�
         # 四段区间首尾相接 → ①+②+③+④ 恒等于合计（旧版素材加载落在时刻1→时刻2 的盲区，
         # 造成 ① 结构性恒 0.00s 而合计里却包含它，无法靠日志定位素材开销）。
         _日志.info(
-            "段%d 采样计时[%s]: ①参考解码=%.2fs ②条件节点=%.2fs ③段间连续=%.2fs ④KSampler=%.2fs 合计=%.2fs",
+            "段%d 采样计时[%s]: ①参考解码=%.2fs ②条件节点=%.2fs ③段间连续=%.2fs ④%s=%.2fs 合计=%.2fs",
             seg.index + 1, "首段" if 模型输入.get("_计时首段") else "后续段",
-            时刻1 - 时刻0, 时刻2 - 时刻1, 时刻3 - 时刻2, 时刻4 - 时刻3, 时刻4 - 时刻0)
+            时刻1 - 时刻0, 时刻2 - 时刻1, 时刻3 - 时刻2,
+            "KSampler" if 渐进计 is None else "采样", 时刻4 - 时刻3, 时刻4 - 时刻0)
+        if 渐进计 is not None:
+            # ④ 的四项拆分只在渐进路径输出（普通路径保持上面那一行不变）。低清条件 是 ③ 之后
+            # 另建一份低清画布条件的开销；④ − (低清条件+低清采样+抬升+高清采样) 的余量是
+            # σ 阶梯构建（KSamplerSelect + BasicScheduler）与 验证宿主续拍条件，均为毫秒级。
+            _日志.info("段%d 渐进采样细分: 低清条件=%.2fs 低清采样=%.2fs 抬升=%.2fs 高清采样=%.2fs",
+                       seg.index + 1, 低清条件秒, 渐进计["低清采样"], 渐进计["抬升"],
+                       渐进计["高清采样"])
     return 产物
 
 
@@ -1154,25 +1359,19 @@ def _应用全局(seg, 全局参数, 共用素材=None):
 
 
 def _是采样产物(产物) -> bool:
-    """段缓存读回的对象是否为本版本的采样产物（h3-4：扁平 latent 字典 + 标量）。
-
-    缓存格式版本 升版后旧文件不再被同一指纹命中，本判定只防「文件被外力改坏」或「日后改
-    schema 忘了升版」：那种情况下 读缓存 会成功返回一个键不对的 dict，直接下标就是在主循环
-    深处抛 KeyError，越过项目的 ValueError-only 契约。判为未命中 → 重算，本次自然修复。
-
-    ⚠️ **三条缺一不可，第三条（自洽）尤其不能省**：`帧数` 与 `video_latent` 的 T_lat 必须同源。
-    生产里 `帧数 = 秒转帧数(…)` 已上抬到 17k+5 网格、T_lat 由官方 `video_latent_t(帧数)` 定，
-    故 `_latent_t_转帧数(T_lat) == 帧数` **严格成立**（17k+5 ↔ 5k+2 互逆）。
-    只查前两条时，一个「键都对、但 帧数 与 latent 时长不自洽」的坏文件会一路通过本守卫 →
-    Phase 2 的 `预算总帧数` 按 `帧数` 预分配成片、而 VAE 实际解码出 `_latent_t_转帧数(T_lat)` 帧
-    → `流式拼接._容得下` 抛 ValueError。那已是 **Phase 1 全跑完（1.0MP@16s 七段 ≈4.4 小时）之后**，
-    且坏文件仍在盘上 ⇒ 重跑立刻在同一处再抛，形成**必须手动清目录才能解开的硬锁**。
-    放在这里判未命中，代价只是一次重算（与「坏文件自愈返回 None」同一处置）。"""
-    if not (isinstance(产物, dict)
-            and getattr(产物.get("video_latent"), "ndim", 0) == 5
-            and isinstance(产物.get("帧数"), int)):
+    """可反序列化的缓存仍可能损坏，须在命中前校验音视频形状与时间网格。"""
+    if not (isinstance(产物, dict) and isinstance(产物.get("帧数"), int)):
         return False
-    return _latent_t_转帧数(int(产物["video_latent"].shape[2])) == 产物["帧数"]
+    video, audio = 产物.get("video_latent"), 产物.get("audio_latent")
+    try:
+        _校验视频latent(video, "缓存")
+        if _latent_t_转帧数(int(video.shape[2])) != 产物["帧数"]:
+            return False
+        if audio is not None:
+            _校验来源音频latent(audio, video.shape[0], 产物["帧数"])
+    except ValueError:
+        return False
+    return True
 
 
 def 执行时间轴(时间轴数据, 全局参数, 模型输入, node_id, 媒体根, 进度回调=None, run_id=None):
@@ -1193,7 +1392,7 @@ def 执行时间轴(时间轴数据, 全局参数, 模型输入, node_id, 媒体
 
 
 def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id, 媒体根, 进度回调=None, run_id=None):
-    """主入口：返回 (images, audio, report)。GPU 集成验证。
+    """主入口：返回 (images, audio, report, first_pass)。GPU 集成验证。
     媒体根＝参考素材文件名的解析根目录（见 后端路由/媒体路由.py 的 媒体根()）。
     run_id（3.1(98)）：本轮运行的短标识（默认 uuid4().hex[:8]），随进度事件下发供前端丢弃 stale
     回调（多轮预取或用户取消后旧 websocket 事件延迟到达时的去抖定位）。测试传固定值可验证事件。
@@ -1233,6 +1432,9 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
     if any(s.run and _中间帧比例(s) is not None for s in 段列表):
         所需节点.add("MiniMaxH3AddGuide")
     _预检官方节点(所需节点, 需要音频=模型输入.get("audio_vae") is not None)
+    # SelfLift 渐进分辨率采样：连了 SelfLift配置 才有的门控（含放大权重文件的摘要），未连接
+    # 渐进参数 为 None → 段循环走与接入本功能前完全相同的 KSampler 调用序列。
+    渐进参数, selflift维度 = _预检渐进采样(全局参数, 段列表)
 
     # B（§二·B）：段缓存全局依赖 = 影响采样的参数（**不含播放 fps**）+ 可证模型链身份 + 缓存失效版本。
     # 模型链身份须在 用到槽 之后算（只覆盖实际参与采样的槽）；播放 fps 仅进输出元数据，不进此键。
@@ -1240,7 +1442,8 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
     模型链身份 = 提取模型链身份(模型输入, 用到槽)
     采样参数 = 构建采样参数(全局参数, 共用素材 is not None,
                             模型输入.get("audio_vae") is not None,
-                            上下文帧数, 模型链身份, 缓存失效版本)
+                            上下文帧数, 模型链身份, 缓存失效版本,
+                            selflift维度=selflift维度)
 
     # 3.1(97)：缓存IO / 解码循环 / 拼接 的分项计时累加器（同 _采样段 既有风格：始终累加、
     # 只在 _计时开启 时输出；perf_counter 非同步、开销可忽略，符合「普通运行不强制同步」）。
@@ -1257,6 +1460,8 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
         return 产物 if _是采样产物(产物) else None
 
     采样产物列表 = []      # Phase 1 产出：CPU 上的 AV latent（跨整轮存活）
+    初采段列表 = []
+    锚来源序号 = None
     报告行 = []
     采样数 = 命中数 = 跳过数 = 0   # §B-7 可观测性：本轮三类段计数（进报告末尾统计行）
     补丁 = {}
@@ -1277,6 +1482,21 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
             进度回调(值, 总步数, {"run": 运行标识, "stage": 阶段, "segment": 段,
                                   "stage_done": 已完成, "stage_total": 段总})
 
+    def _记录初采(seg, 产物, 指纹):
+        refs, assets = _初采素材(seg, 媒体根, 摘要缓存)
+        前段 = 锚来源序号 if 尾帧_video is not None and 产物.get("锚帧数", 0) > 0 else None
+        音频窗 = (float(seg.start), float(seg.end)) if 全局参数["参考共用"] and 选模型槽(seg.task) == "ref2va" else None
+        中间帧号 = None
+        中间图, 比例 = refs.get("中间帧"), refs.get("中间帧位置", 0.5)
+        if (需要尾帧(seg.task) and isinstance(中间图, str) and 中间图
+                and type(比例) in (int, float) and 0 < 比例 < 1):
+            帧数 = int(产物["帧数"])
+            裁 = 裁前缀帧数(帧数, int(产物.get("锚帧数", 0)))
+            中间帧号 = max(裁 + 1, min(帧数 - 2, 裁 + round((帧数 - 裁 - 1) * 比例)))
+        初采段列表.append(记录初采段(
+            seg, 产物, 指纹=指纹, 素材记录=assets, 前段序号=前段,
+            参考音频窗=音频窗, 中间帧号=中间帧号, 已解析refs=refs))
+
     # ========== Phase 1：逐段采样，只留 latent ==========
     # 参考缓存作用域只包住 Phase 1（素材解码只发生在采样侧）；退出 with 即丢引用，
     # 让 Phase 2 的 清理显存 能真把它们 gc 掉，解码前多腾一份空间。
@@ -1285,7 +1505,7 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
             # 本段依赖：素材内容摘要（同名换内容即失效，§B-1）+ 锚定信息（被锚定/锚帧数/前段指纹）。
             # 锚帧数/前段指纹 由上一有效段一路带下来，与真锚定所用值同源，杜绝「指纹算一套、真锚另一套」。
             # 被锚定/锚帧数/上段尾音频 的历史取舍（为何一个布尔够用）见 构建段指纹源 docstring。
-            素材 = _素材摘要(seg.refs, 媒体根, 摘要缓存)
+            素材 = _素材摘要(seg.refs, 媒体根, 摘要缓存, seg.task)
             指纹源 = 构建段指纹源(seg, 素材, 尾帧_video is not None,
                                    尾帧锚帧数, 前段指纹, 上下文帧数)
             指纹 = 段指纹(指纹源, 采样参数)
@@ -1296,6 +1516,8 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
                 报告行.append(f"段{seg.index + 1}: 跳过（未选运行）{'，用缓存' if 缓存 else ''}")
                 if 缓存:
                     采样产物列表.append(缓存)
+                    _记录初采(seg, 缓存, 指纹)
+                    锚来源序号 = seg.index
                     # Concern #5：skip 段**有缓存**时它仍参与拼接，故其尾帧继续作下段锚素材。
                     尾帧_video, 尾帧_audio, 尾帧锚帧数, 音频结束坐标 = 取尾帧_latent(
                         缓存["video_latent"], 缓存.get("audio_latent"), 上下文帧数)
@@ -1306,6 +1528,7 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
                     尾帧_video = 尾帧_audio = None
                     音频结束坐标 = None
                     尾帧锚帧数 = 0
+                    锚来源序号 = None
                     前段指纹 = None        # 链断裂：下段作为独立段，不带前段依赖指纹
                 # skip 段也占掉它在 Phase 1 的那一步（进度只反映采样阶段，skip 段虽不采样但仍占位）
                 _发进度(seg.index + 1, "采样", seg.index + 1, seg.index + 1, 采样段数)
@@ -1328,15 +1551,20 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
                 段模型输入["model_p"] = 补丁[槽]
                 段模型输入["_计时首段"] = 该槽首段
                 产物 = _采样段(seg, 全局参数, 段模型输入,
-                               尾帧_video, 尾帧_audio, 尾帧锚帧数, 媒体根, 音频结束坐标=音频结束坐标)
+                               尾帧_video, 尾帧_audio, 尾帧锚帧数, 媒体根, 音频结束坐标=音频结束坐标,
+                               渐进=渐进参数)
                 起 = time.perf_counter()
                 写缓存(node_id, seg.index, 指纹, 产物)
                 计时计["写秒"] += time.perf_counter() - 起
                 计时计["写次"] += 1
                 采样数 += 1
-                报告行.append(f"段{seg.index + 1}: 已采样 {产物['帧数']}帧（锚{产物['锚帧数']}）")
+                报告行.append(f"段{seg.index + 1}: 已采样 {产物['帧数']}帧（锚{产物['锚帧数']}）"
+                             + ("" if 渐进参数 is None else
+                                f"，渐进采样：低清{渐进参数['低宽']}x{渐进参数['低高']} 前{渐进参数['切换步']}步"))
                 采样产物列表.append(产物)
 
+            _记录初采(seg, 产物, 指纹)
+            锚来源序号 = seg.index
             # 取本段尾帧 latent 作下段锚素材（方案 B：不再 decode 出像素）
             尾帧_video, 尾帧_audio, 尾帧锚帧数, 音频结束坐标 = 取尾帧_latent(
                 产物["video_latent"], 产物.get("audio_latent"), 上下文帧数)
@@ -1397,6 +1625,7 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
         清理显存()
 
         前段末帧 = 前段序号 = None
+        输出游标 = 0
         for i, 采样产物 in enumerate(采样产物列表):
             起d = time.perf_counter()
             段 = _裁并拼(_解码段(采样产物, 模型输入["vae"], 模型输入.get("audio_vae")))
@@ -1409,6 +1638,10 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
                 起色光 = time.perf_counter()
                 匹配开头色光(段["images"], 前段末帧)
                 计时计["色光秒"] += time.perf_counter() - 起色光
+                初采段列表[i]["color_match"] = True
+            初采段列表[i]["output_start"] = 输出游标
+            输出游标 += int(段["images"].shape[0])
+            初采段列表[i]["output_end"] = 输出游标
             拼.追加(段["images"])
             前段末帧 = 拼.结果()[-1]
             前段序号 = 本段序号
@@ -1472,7 +1705,10 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
     # 3.1(98)：整体完成事件（只在 images/audio 真正就绪后补发，保证 value==max 意味“可取回产物”）。
     # 完整归还显存由 执行时间轴 外层 finally 兜底（3.2(108)），成功/异常都执行且仅此一次（旧 D 行已上提）。
     _发进度(总步数, "完成", None, len(采样产物列表), len(采样产物列表))
-    return images, audio, "\n".join(报告行)
+    初采产物 = 组装初采产物(
+        初采段列表, 最终音频=audio, 总帧数=输出帧, 输出帧率=用户帧率,
+        全局参数=采样参数, 来源节点=node_id, 运行标识=运行标识) if images is not None else None
+    return images, audio, "\n".join(报告行), 初采产物
 
 
 def _裁后帧数(采样产物) -> int:
@@ -1520,13 +1756,10 @@ def _拼接音频(音频列表, fps=FPS):
     帧数 取 Phase 2 解码回填的 "帧数" 键（_裁音频前缀 不产出该键）；缺失/None 按 0 帧
     （整段被裁光或畸形占位的正常表现）。缺失段（waveform=None）补零的形状取首个有效波形
     的前置维度——真身 AUDIO 是 3D (C,1,N)，用 2D 占位会让 torch.cat 直接抛错。
-    全段无有效波形 → None（纯无声成片）。单段列表直传原对象（保持契约）。"""
+    全段无有效波形 → None（纯无声成片）。单段与多段使用相同的长度校准。"""
     import torch
     if not 音频列表:
         return None
-    if len(音频列表) == 1:
-        单 = 音频列表[0]
-        return 单 if 单.get("waveform") is not None else None
     首个有效 = next((a for a in 音频列表 if a.get("waveform") is not None), None)
     if 首个有效 is None:
         return None

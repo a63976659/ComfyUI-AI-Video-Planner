@@ -79,8 +79,8 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     const at按钮 = document.createElement("button");
     at按钮.className = "lvp-胶囊"; at按钮.type = "button";
     at按钮.textContent = "@"; at按钮.title = "插入参考素材标签";
-    // toggle：弹层开着再点 @ 直接关闭。此前是 关弹层+重开＝看起来没关；且 编辑区.focus() 让焦点
-    // 常驻编辑区，点空白处 blur 永不触发 → 「不选条目弹层不消失」。外点关闭见 弹参考列表 的 外点 监听。
+    // 保留编辑区焦点，避免长按期间 blur 先关闭弹层，松开 click 又重新打开。
+    at按钮.onmousedown = (e) => e.preventDefault();
     at按钮.onclick = () => {
         if (弹层) { 关弹层(); return; }
         编辑区.focus();
@@ -146,6 +146,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     容器.appendChild(盒);
 
     let 弹层 = null, 外点 = null;
+    工具行.addEventListener("scroll", 关弹层);
 
     function 建chip(标签) {
         const span = document.createElement("span");
@@ -336,10 +337,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
         if (前.endsWith("@")) 弹参考列表(range.getBoundingClientRect());
         else 关弹层();
     });
-    // blur（点 @ 按钮时 mousedown 会先触发一次）只作废**当时已存在**的那一层弹层：
-    // 记快照 待关，150ms 后仍还是同一层才关。否则短点 @ 时「blur 挂定时器 → click 开新弹层 →
-    // 定时器到点把新开的一起杀掉」= 弹层闪一下就散；慢点（>150ms）定时器先落空才正常。
-    // 点别处关闭的原行为不受影响：那种场景 blur 时弹层就是 待关，到点照常关。
+    // 键盘等方式移焦时只关闭当时的弹层，不误关此后新开的弹层。
     编辑区.addEventListener("blur", () => {
         const 待关 = 弹层;
         if (!待关) return;

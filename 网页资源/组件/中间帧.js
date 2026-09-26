@@ -1,4 +1,5 @@
 export function 分配中间帧(原段, 子段组) {
+    if (String(原段.task ?? "").trim().toLowerCase() !== "fl2v") return 子段组;
     const 名 = 原段.refs?.中间帧;
     if (名 == null || 名 === "" || 子段组.length < 2) return 子段组;
     const 比例 = 原段.refs.中间帧位置 === undefined ? 0.5 : 原段.refs.中间帧位置;

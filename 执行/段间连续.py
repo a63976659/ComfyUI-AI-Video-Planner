@@ -213,6 +213,15 @@ def _校验音频latent(音频, 描述, 批次):
         raise ValueError(f"{描述}音频 latent 形状须为非空 [B,32,2,T]，且批次一致")
 
 
+def _校验来源音频latent(音频, 批次, 视频帧数):
+    _校验音频latent(音频, "来源", 批次)
+    # 与宿主 temporal_shape 同序先除 24 再乘 40，避免取整边界不同。
+    期望音频长 = round(视频帧数 / 24 * 40)
+    if 音频.shape[-1] >= round(默认音频上下文帧数 * _FRAME_RESCALE) and 音频.shape[-1] != 期望音频长:
+        raise ValueError("来源音频长度不在完整视频时间网格上，不能推断尾音频对齐坐标")
+    return 期望音频长
+
+
 def 取尾帧_latent(video_latent, audio_latent, 上下文帧数: int = 默认上下文帧数):
     """返回独立克隆的视频尾块、音频尾窗、实际锚帧数及相对锚起点的音频结束 tick。"""
     if int(上下文帧数) <= 0 or video_latent is None:
@@ -229,15 +238,11 @@ def 取尾帧_latent(video_latent, audio_latent, 上下文帧数: int = 默认�
 
     尾帧_audio, 音频结束坐标 = None, None
     if audio_latent is not None:
-        _校验音频latent(audio_latent, "来源", video_latent.shape[0])
+        期望音频长 = _校验来源音频latent(audio_latent, video_latent.shape[0], 来源视频帧数)
         音频长 = int(audio_latent.shape[-1])
         窗口 = round(默认音频上下文帧数 * _FRAME_RESCALE)
         音频_token数 = min(窗口, 音频长)
         视频结束坐标 = 来源视频帧数 * _FRAME_RESCALE
-        # 与宿主 temporal_shape 同序先除 24 再乘 40 取整，短音频也按完整长度推导可为负的 overhang。
-        期望音频长 = round(来源视频帧数 / 24 * 40)
-        if 音频长 >= 窗口 and 音频长 != 期望音频长:
-            raise ValueError("来源音频长度不在完整视频时间网格上，不能推断尾音频对齐坐标")
         overhang = 期望音频长 - 视频结束坐标
         尾帧_audio = audio_latent[..., -音频_token数:].clone()
         音频结束坐标 = round(锚帧数 * _FRAME_RESCALE + overhang)
@@ -300,6 +305,32 @@ def 钉入上下文_from_latent(positive, latent, 尾帧_video_latent, 尾帧_au
         keyframes.extend(锚.copy() for 锚 in 新锚)
         新条件.append([条件, {**信息, "minimax_keyframes": keyframes}])
     return 新条件
+
+
+def 缩放视频latent空间(视频, 目标高: int, 目标宽: int):
+    """把 [B,24,T,H,W] 视频 latent 逐 token 双线性缩放到 (目标高, 目标宽)；通道与时间轴原样保留。
+
+    两处消费者（执行/渐进采样.py 的插值降级抬升、执行/执行核心._构建段条件 的低清尾块锚定）：
+    低清阶段用的尾块来自上一段的**高清** latent，必须先降到本段低清画布的 latent 尺寸，否则被
+    上方 钉入上下文_from_latent 的空间尺寸校验直接拒绝。
+    逐 token 独立缩放（时间维不进插值）⇒ token 数、锚帧数、音频时间网格全不变，续拍语义不受影响。
+    尺寸已一致时返回克隆而非入参：调用方拿到的张量可能继续被就地改写，不能污染上一段产物。
+    """
+    _校验视频latent(视频, "待缩放")
+    高, 宽 = int(目标高), int(目标宽)
+    if 高 < 1 or 宽 < 1:
+        raise ValueError(f"缩放视频 latent 的目标尺寸须为正整数，收到 高={高} 宽={宽}")
+    批次, _, token数, 源高, 源宽 = 视频.shape
+    if (高, 宽) == (源高, 源宽):
+        return 视频.clone()
+    # fp32 插值再降回原 dtype：半精度直接插值会放大舍入误差，而锚块本身就是引导信号。
+    # 必须先 permute 成 [B,T,C,H,W] 再合并 B/T：输入是 [B,C,T,H,W]，直接 reshape 会把通道当成
+    # 时间片（元素数照样相等、只有语义错位），缩放结果取值串位且形状看不出来。
+    x = 视频.detach().float().permute(0, 2, 1, 3, 4).clone().reshape(批次 * token数, 视频.shape[1], 源高, 源宽)
+    x = torch.nn.functional.interpolate(x, size=(高, 宽), mode="bilinear",
+                                        align_corners=False, antialias=True)
+    return (x.reshape(批次, token数, 视频.shape[1], 高, 宽)
+             .permute(0, 2, 1, 3, 4).to(dtype=视频.dtype).contiguous())
 
 
 def _批量方框模糊(frames, kernel):

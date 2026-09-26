@@ -108,7 +108,7 @@ class 长视频规划师(io.ComfyNode):
                 # 尾帧锚定 同样置于 inputs 末尾（向后兼容铁律，见上 参考共用 注释）：旧存档 widgets_values
                 #   不含本 widget → 载入时拿默认 False（尾帧锚定关闭）。与 execute 签名末位参数一致。
                 io.Boolean.Input("尾帧锚定", default=False,
-                                 tooltip="开启：把上一段的尾帧画面与约 1 秒尾音频作为续拍条件锚入下一段（等效官方 MiniMaxH3AddGuide，但直接传 latent、不经解码再编码，故更快也更保真），接缝零重叠硬切、只对续拍段开头做低频色光衔接（不混叠两段画面）；关闭：各段独立生成、接缝硬切、不做任何过渡处理。默认关闭",
+                                 tooltip="开启：把上一段的尾帧画面与约 1 秒尾音频作为续拍条件锚入下一段（使用官方 MiniMaxH3AddGuide 同类条件，直接传 latent、不经解码再编码），接缝零重叠硬切、只对续拍段开头做低频色光衔接（不混叠两段画面）；续拍开头优先使用上段尾部，指定新首帧须关闭续拍；关闭：各段独立生成、接缝硬切、不做任何过渡处理。默认关闭",
                                  extra_dict={"hidden": True}),   # 节点上不显示，经时间轴工具条「尾帧锚定」开关编辑
                 # 剪辑草稿 同样置于 inputs 末尾（向后兼容铁律，见 参考共用 注释）：旧存档不含本 widget
                 #   → 载入时拿默认空草稿。
@@ -129,6 +129,12 @@ class 长视频规划师(io.ComfyNode):
                 #   即可整体作废段缓存重采样（可靠兼底）。普通可见数值 widget（非 hidden），无需前端镜像同步。
                 io.Int.Input("缓存失效版本", default=0, min=0, max=999999, step=1,
                              tooltip="换模型/权重后手动 +1 以整体作废段缓存重采样（自动失效需 loader 携带可复现模型标识）；默认 0"),
+                # SelfLift配置 置于 inputs 末尾：io.Custom 的选填输入只渲染成 socket、不产生 widget，
+                #   故不受「新 widget 必须追加末尾」的位置回填约束；放末尾同时让前 20 个输入的顺序与
+                #   名称一字不动。不连接＝None＝单阶段采样（原路径逐字不变）。
+                io.Custom("LVP_SELFLIFT_CONFIG").Input("SelfLift配置", optional=True,
+                                                       tooltip="连 SelfLift配置 节点：每段前若干步在低清画布采样、抬升后跑完剩余步。"
+                                                               "不连接保持单阶段；启用时「采样器」须为 euler"),
             ],
             outputs=[
                 io.Image.Output("图像"),
@@ -136,6 +142,7 @@ class 长视频规划师(io.ComfyNode):
                 io.Float.Output("帧率"),
                 io.Int.Output("帧数"),
                 io.String.Output("报告"),
+                io.Custom("LVP_FIRST_PASS").Output("初采产物"),
             ],
             hidden=[io.Hidden.unique_id],
         )
@@ -159,14 +166,15 @@ class 长视频规划师(io.ComfyNode):
         return _外部依赖指纹(
             kwargs.get("时间轴数据") or '{"segments":[]}',
             取媒体根(),
-            kwargs.get("缓存失效版本", 0))
+            kwargs.get("缓存失效版本", 0),
+            参考素材=kwargs.get("参考素材"))
 
     @classmethod
     def execute(cls, *, fl2va模型=None, ref2va模型=None, CLIP编码器, 视频VAE, 音频VAE,
                 任务类型, 全局提示词, 时间轴数据, 参考素材, 运行选择, 帧率,
                 输出分辨率, 百万像素, 步数, 采样器, 调度器,
                 参考共用=False, 尾帧锚定=False, 剪辑草稿='{"brief":{},"segments":[]}',
-                缓存失效版本=0):
+                缓存失效版本=0, SelfLift配置=None):
         # 剪辑草稿：widget 恒为默认值占位（真源已迁前端 node.properties，详 schema 注释）；生成链路只消费 时间轴数据 ⇒ 有意忽略。
         try:                                        # ComfyUI 运行时（以包形式加载）
             from ..执行.执行核心 import 执行时间轴
@@ -184,7 +192,7 @@ class 长视频规划师(io.ComfyNode):
         # 解耦）；无全局帧数 widget——每段帧数只由时间轴跨度决定。
         宽, 高 = 分辨率到宽高(输出分辨率, 百万像素)
         全局参数 = {
-            "帧率": 帧率, "宽": 宽, "高": 高,
+            "帧率": 帧率, "宽": 宽, "高": 高, "百万像素": 百万像素,
             "步数": 步数, "采样器": 采样器, "调度器": 调度器,
             "默认任务": 解析任务(任务类型), "全局提示词": 全局提示词,
             "参考素材": 参考素材, "运行选择": 运行选择,
@@ -192,6 +200,9 @@ class 长视频规划师(io.ComfyNode):
             # §B-2：换 ckpt 无可证模型标识时的手动作废入口；int 归一防前端传字符串造成
             #   指纹类型敏感（json 区分 0 与 "0"）。执行核心 将其入采样参数（不入则无效果）。
             "缓存失效版本": int(缓存失效版本 or 0),
+            # SelfLift配置 原样透传（未连接＝None）：门控与低清/高清两阶段都在 执行核心 采样前
+            #   统一判定，那里才知道 步数/采样器/宽高 的实际值；本层不校验以免两处规则漂移。
+            "selflift": SelfLift配置,
         }
         # 尾帧锚定开关 → 上下文帧数（段间锚定的总闸；接缝自 2026-09 起恒零重叠硬切）：
         #   执行核心以「上下文帧数>0」判定是否把上一段尾帧/尾音频 latent 锚入下一段
@@ -216,7 +227,7 @@ class 长视频规划师(io.ComfyNode):
             api.execution.set_progress(当前, 总数, node_id=node_id)
             _广播进度(node_id, 当前, 总数, 事件信息)
 
-        images, audio, report = 执行时间轴(
+        images, audio, report, first_pass = 执行时间轴(
             时间轴数据, 全局参数, 模型输入, node_id, 媒体根(), 进度回调=进度)
 
         # I2（Task 11 code review）：全段 skip+无缓存 时 执行核心 返回 images=None。V3 无输出
@@ -229,4 +240,4 @@ class 长视频规划师(io.ComfyNode):
         fps = float(帧率)
         # IMAGE 为 [T,H,W,C]，帧数在 dim0
         frame_count = int(images.shape[0])
-        return io.NodeOutput(images, audio, fps, frame_count, report)
+        return io.NodeOutput(images, audio, fps, frame_count, report, first_pass)

@@ -9,13 +9,7 @@ import { 创建剪辑时间轴 } from "./剪辑时间轴.js";
 // 框架样式必然先注入（创建状态栏面板 首行），故 `.lvp-生成` 的 padding/font-size 照常胜出，与拆分前一致。
 // 🔒 `.lvp-brief网格` 列模板必须是 minmax(0,1fr)：1fr＝minmax(auto,1fr)，auto 最小值＝列内 min-content，
 // 模型下拉的长选项（如「Kimi-K3（未配置Key）」）会把左列撑宽 → 与上方两列错位（详 11 §I12）。
-// 🔒 `.lvp-brief区` 必须自带 `container-type:size` ＋ 下面的「矮框密度档」：区内是**固定高度**的两列网格
-// （主题行＋13 格（段数通栏占两列＝14 列位）＋错误行＋回执），没有右列 `.lvp-提示词入{flex:1}` 那种吸收器，宿主放大（UI/浏览器缩放）
-// → 状态栏 vh 高度变矮 → 网格 min-content 撑住不缩 → 末两格（模型下拉/生成钮）画到圆角框**外面**。
-// 所以随框高只**收紧留白**（控件内距、网格行距、空错误行/空回执不占位、有字的信息行限一行＋省略号），
-// 字号一律 11px 不动（用户实测 10px 版「小一号确实不好读」），并配套把 `.lvp-主体` 下限抬到 195px 兜住最矮档
-// ⇒ 任何缩放下内容都装在框内，也不出滚动条（曾加的 `overflow-y:auto` ＋滚动条样式系被否方案遗留，已删；
-// 因此信息行的高度必须**封顶**，见下面密度档的 🔒）。详 11 §I20。
+// 矮框只收留白；下限和密度阈值须同时容纳单行消息、原生控件缩放舍入及窄页滚动占高。
 const 样式已注入 = { v: false };
 // 面板重建（模块热重载 / 状态栏入口 DOM 级防重复重建）时用来摘掉上一轮 window 监听。
 let 上轮监听 = null;
@@ -26,15 +20,13 @@ function 注入样式() {
       .lvp-brief区{display:flex;flex-direction:column;gap:3px;flex:0 0 268px;width:268px;box-sizing:border-box;background:var(--comfy-menu-bg,#2b2b2b);padding:6px;border-radius:8px;min-height:0;container-type:size}
       .lvp-brief行{display:flex;align-items:center;gap:4px}
       .lvp-brief网格{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:3px 10px}
-      .lvp-brief网格>.跨{grid-column:1/-1}   // 通栏格（段数）：横跨两列，输入框不被「0=自动分配」提示挤窄
+      .lvp-brief网格>.跨{grid-column:1/-1}
       .lvp-brief标{color:var(--p-text-muted-color,#9aa0a8);font-size:10px;white-space:nowrap;flex:0 0 36px;width:36px;text-align:right}
       .lvp-brief单位{color:var(--p-text-muted-color,#9aa0a8);font-size:10px;flex:0 0 auto;white-space:nowrap}
       .lvp-brief入,.lvp-brief选{padding:2px 4px;background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:4px;font:11px system-ui;flex:1;min-width:0}
       .lvp-brief入.短,.lvp-brief选.短{flex:0 0 44px;width:44px}
       .lvp-brief入.中,.lvp-brief选.中{flex:0 0 78px;width:78px}
-      /* 🔒 两条信息行（错误 / 来源回执）恒一行、超出走省略号、完整文案挂 title：本列是固定高的 flex 列，
-         没有右列 .lvp-提示词入{flex:1} 那种吸收器，且已无滚动兜底 ⇒ 行高必须与内容无关地封顶
-         （最矮档底部余量 18.7px，密度档退出处更小），否则末两格「模型下拉／生成规划」会画到圆角框外。 */
+      /* 长消息不得换行挤占固定表单高度，完整内容由 title 承载。 */
       .lvp-brief错{color:var(--p-error-color,#ff6b6b);font-size:10px;min-height:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .lvp-brief右{display:flex;flex-direction:column;gap:4px;flex:0 0 168px;width:168px;align-self:stretch;margin-left:auto;box-sizing:border-box;background:var(--comfy-menu-bg,#2b2b2b);padding:6px;border-radius:8px}
       .lvp-模型选{flex:1;min-width:0;padding:2px 5px;background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:6px;font:11px system-ui}
@@ -47,11 +39,8 @@ function 注入样式() {
       /* A5 知识库来源回执行（常驻灰字；原内联样式移进类里，好让下面的 :empty 能收起占位。
          恒一行＋省略号，同上方 .lvp-brief错 的行高封顶口径；完整来源清单本来就在 title 上） */
       .lvp-brief回执{color:var(--p-text-muted-color,#9aa0a8);font-size:10px;min-height:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      /* 矮框密度档：左列框高（内容盒）≲205px 时只**收紧留白**——控件上下内距 2→1px、网格行距 3→2px、
-         空的错误行/回执行不占位（平时它们保留 12px 防布局跳动）。⚠️ **不动字号**：用户实测 10px 版「小一号确实不好读」，
-         宁可让面板矮一档也保 11px。阈值按内容盒取值（＝框高−上下内距 12）。
-         🔒 信息行的「有字则恒一行」不在此档内，见上面 .lvp-brief错 的全局封顶。 */
-      @container (max-height:205px){
+      /* 阈值按内容盒计算，退出时须容纳恢复的内距、行距和两条信息行占位。 */
+      @container (max-height:225px){
         .lvp-brief网格{gap:2px 10px}
         .lvp-brief入,.lvp-brief选,.lvp-模型选{padding:1px 4px}
         .lvp-brief错:empty,.lvp-brief回执:empty{display:none}
@@ -130,7 +119,7 @@ export function 创建规划页面板(规划页, 上下文) {
     const 每段单位 = document.createElement("span"); 每段单位.className = "lvp-brief单位"; 每段单位.textContent = "秒"; 每段格.appendChild(每段单位);
     brief字段.每段建议时长 = 每段el;
     const 段数格 = 网格格("段数:"); 段数格.classList.add("跨");   // 通栏＝第三排只有段数（用户 2026-09-24 排布），输入框吃满整行不被提示挤窄
-    const 限el = 入控("lvp-brief入", "number"); 限el.value = 0; 限el.min = 0; 限el.max = 120; 段数格.appendChild(限el);   // UI 输入天花板 120；后端无固定上限（校验归一按 总时长//MIN_SEG 动态束段）
+    const 限el = 入控("lvp-brief入", "number"); 限el.value = 0; 限el.min = 0; 限el.max = 120; 限el.style.maxWidth = "33.33%"; 段数格.appendChild(限el);   // UI 输入天花板 120；后端无固定上限（校验归一按 总时长//MIN_SEG 动态束段）
     const 段数提示 = document.createElement("span"); 段数提示.className = "lvp-brief单位"; 段数提示.textContent = "0=自动分配"; 段数提示.title = "0 表示按总时长自动分配段数"; 段数格.appendChild(段数提示);
     brief字段.段数上限 = 限el;
     const 任务el = 入控("lvp-brief选", "选"); 网格格("任务:").appendChild(任务el); brief字段.默认任务 = 任务el;

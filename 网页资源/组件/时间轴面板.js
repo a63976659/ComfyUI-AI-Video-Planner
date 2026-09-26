@@ -42,7 +42,7 @@ function 注入样式() {
 
       /* ── 工具条 ───────────────────────────────────────── */
       .lvp-tl-工具{display:flex;align-items:center;gap:4px;flex:0 0 auto;min-width:0;overflow-x:auto}
-      .lvp-tl-工具>*{flex-shrink:0}
+      .lvp-tl-工具>*,.lvp-tl-工具>.lvp-cache>*{flex-shrink:0}
       .lvp-tl-钮{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;line-height:1.35;border-radius:6px;
         border:1px solid var(--tl-line2);background:linear-gradient(180deg,var(--comfy-menu-bg,#2c2f35),var(--comfy-menu-secondary-bg,#23262b));
         color:var(--tl-txt);font:inherit;cursor:pointer;white-space:nowrap;
@@ -338,7 +338,7 @@ export function 挂载时间轴(node, 面板) {
     function 建锚定开关() {
         const 标 = document.createElement("label");
         标.className = "lvp-tl-锚";
-        标.title = "渐变过渡：开启则把上一段尾帧画面与约 1 秒尾音频作为续拍条件锚入下一段（官方 AddGuide 同款 latent 直传），接缝零重叠硬切、只对续拍段开头做低频色光衔接；关闭则各段独立生成、接缝硬切、不做任何过渡处理（写入节点隐藏 widget「尾帧锚定」）";
+        标.title = "渐变过渡：开启则把上一段尾帧画面与约 1 秒尾音频作为续拍条件锚入下一段（官方 AddGuide 同款 latent 直传），接缝零重叠硬切、只对续拍段开头做低频色光衔接；续拍开头优先使用上段尾部，指定新首帧须关闭续拍；关闭则各段独立生成、接缝硬切、不做任何过渡处理（写入节点隐藏 widget「尾帧锚定」）";
         标.onclick = (e) => e.stopPropagation();
         const cb = document.createElement("input");
         cb.type = "checkbox"; cb.checked = 真源.读尾帧锚定(node);

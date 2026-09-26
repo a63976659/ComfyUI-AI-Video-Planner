@@ -21,12 +21,14 @@ _百万像素上限 = 4.0                   # H3 上限收紧为 4（原 16，�
 _步数下限 = 1                        # 与 KSampler steps min 同源
 _步数上限 = 10000
 
-# 段级进度的**自有** websocket 事件名（前端 网页资源/状态栏入口.js 按字面量镜像，同步锁见
-# 测试_常量同步.py 的 test_段级进度事件名_前后端同步）。为何不能复用宿主事件，见 _广播进度 docstring。
+# 段级进度的**自有** websocket 事件名。⚠️ 前端目前只有 长视频规划师_进度 的监听器
+# （网页资源/状态栏入口.js 的 addEventListener），本事件名两侧都无人接收，导演出图期间
+# 状态栏面板不动；测试_常量同步 的 test_段级进度事件名 也只锁 长视频规划师 那一条。
+# 为何不能复用宿主事件，见 _广播进度 docstring。
 _进度事件名 = "h3_导演台_进度"
 
 
-def _广播进度(node_id, 当前, 总数):
+def _广播进度(node_id, 当前, 总数, 事件信息=None):
     """把段级进度推到自有 websocket 通道，供状态栏面板显示「生成中 3/7（段）」。
 
     ⚠️ 为何必须自有通道（而非复用宿主的进度事件）：
@@ -39,13 +41,20 @@ def _广播进度(node_id, 当前, 总数):
         也一样分不开（它按 node_id 键，两者同键）。
       ⇒ 按 `node` 过滤只能滤掉**别的**节点，滤不掉同节点的 KSampler 步进；唯一可靠区分是自有事件名。
 
+    3.1(98)：事件信息 可选，形参契约与 长视频规划师._广播进度 一致——执行核心._发进度 固定发
+    (值, 总步数, {run/stage/segment/stage_done/stage_total}) 三形参；传进来时与基础 payload 合入，
+    两形参调用仍发 {node, value, max}。
+
     best-effort：拿不到 PromptServer（无服务器上下文/单测）或 send_sync 报错都**吞掉**——
     进度上报失败绝不能把已跑了数小时的生成轮次拖成报错。try 体只含宿主 API 调用、无我方
     逻辑，故宽 except 不会把我方 bug 洗成静默（同 段缓存.读缓存 第 2 层的口径）。"""
     try:
         from server import PromptServer
         srv = PromptServer.instance
-        srv.send_sync(_进度事件名, {"node": node_id, "value": 当前, "max": 总数}, srv.client_id)
+        数据 = {"node": node_id, "value": 当前, "max": 总数}
+        if 事件信息:
+            数据.update(事件信息)
+        srv.send_sync(_进度事件名, 数据, srv.client_id)
     except Exception:  # noqa: BLE001 - try 体仅第三方调用（见 docstring），进度失败不得影响生成
         pass
 
@@ -101,7 +110,7 @@ class H3导演台(io.ComfyNode):
                 # 尾帧锚定 同样置于 inputs 末尾（向后兼容铁律，见上 参考共用 注释）：旧存档 widgets_values
                 #   不含本 widget → 载入时拿默认 False（尾帧锚定关闭）。与 execute 签名末位参数一致。
                 io.Boolean.Input("尾帧锚定", default=False,
-                                 tooltip="开启：把上一段的尾帧画面与约 1 秒尾音频作为续拍条件锚入下一段（等效官方 MiniMaxH3AddGuide，但直接传 latent、不经解码再编码，故更快也更保真），接缝零重叠硬切、只对续拍段开头做低频色光衔接（不混叠两段画面）；关闭：各段独立生成、接缝硬切、不做任何过渡处理。默认关闭",
+                                 tooltip="开启：把上一段的尾帧画面与约 1 秒尾音频作为续拍条件锚入下一段（使用官方 MiniMaxH3AddGuide 同类条件，直接传 latent、不经解码再编码），接缝零重叠硬切、只对续拍段开头做低频色光衔接（不混叠两段画面）；续拍开头优先使用上段尾部，指定新首帧须关闭续拍；关闭：各段独立生成、接缝硬切、不做任何过渡处理。默认关闭",
                                  extra_dict={"hidden": True}),   # 节点上不显示，经时间轴工具条「尾帧锚定」开关编辑
             ],
             outputs=[
@@ -154,14 +163,15 @@ class H3导演台(io.ComfyNode):
         模型输入 = {"fl2va_model": fl2va模型, "ref2va_model": ref2va模型,
                     "clip": CLIP编码器, "vae": 视频VAE, "audio_vae": 音频VAE}
 
-        def 进度(当前, 总数):
+        def 进度(当前, 总数, 事件信息=None):
             # V3 set_progress(value, max_value, node_id)；显式带 node_id，避免依赖执行上下文传播。
             # 它只更新宿主 progress registry（供宿主自己的进度条/合并态用），**不发** legacy "progress"
             # 事件 ⇒ 自家状态栏面板看不到；面板靠下一行的自有通道（缘由详 _广播进度 docstring）。
+            # 3.1(98)：事件信息（run/stage/segment/...）仅走自有通道——宿主 set_progress 无 extra 接口。
             api.execution.set_progress(当前, 总数, node_id=node_id)
-            _广播进度(node_id, 当前, 总数)
+            _广播进度(node_id, 当前, 总数, 事件信息)
 
-        images, audio, report = 执行时间轴(
+        images, audio, report, _ = 执行时间轴(
             时间轴数据, 全局参数, 模型输入, node_id, 媒体根(), 进度回调=进度)
 
         # I2（Task 11 code review）：全段 skip+无缓存 时 执行核心 返回 images=None。V3 无输出

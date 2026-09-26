@@ -221,6 +221,29 @@ export function 创建编辑页面板(编辑页, 上下文) {
         真源.写时间轴(节点, { segments: 段组 });
     };
     首尾帧区.append(首帧框.盒, 尾帧框.盒, 中间帧框.盒);
+    // i2v 比例模式选择（仅 i2v 可见）：原图比例 / 裁剪到设定比例
+    const 比例模式盒 = document.createElement("div");
+    比例模式盒.className = "lvp-帧框";
+    const 比例模式标 = document.createElement("span");
+    比例模式标.className = "lvp-帧标";
+    比例模式标.textContent = "比例模式";
+    const 比例模式sel = document.createElement("select");
+    比例模式sel.className = "lvp-帧选";
+    [["裁剪", "按设置尺寸比例裁剪生成"], ["原图", "按图像原尺寸比例生成"]].forEach(([v, t]) => {
+        const o = document.createElement("option"); o.value = v; o.textContent = t;
+        比例模式sel.appendChild(o);
+    });
+    比例模式盒.append(比例模式标, 比例模式sel);
+    首尾帧区.appendChild(比例模式盒);
+    比例模式sel.onchange = () => {
+        const 节点 = 取节点();
+        if (!节点) return;
+        const 段组 = 真源.读时间轴(节点).segments || [];
+        const i = 状态.取("选中段");
+        if (!段组[i]) return;
+        段组[i].i2v比例模式 = 比例模式sel.value;
+        真源.写时间轴(节点, { segments: 段组 });
+    };
 
     function 建帧下拉(名, 变更) {
         // 竖向三段：文字标在上、下拉在其下、选图后带等宽正方形预览。
@@ -260,7 +283,9 @@ export function 创建编辑页面板(编辑页, 上下文) {
         const refs = 段组[状态.取("选中段")]?.refs || {};
         位置入.disabled = !refs.中间帧;
         const 比例 = refs.中间帧位置 === undefined ? 0.5 : refs.中间帧位置;
-        位置入.value = Number.isFinite(比例) ? String(Number((比例 * 100).toFixed(9))) : "";
+        const 百分比 = 比例 * 100;
+        const 简值 = Number(百分比.toFixed(9));
+        位置入.value = Number.isFinite(比例) ? String(简值 > 0 && 简值 < 100 ? 简值 : 百分比) : "";
         位置入.setCustomValidity(refs.中间帧 && (!Number.isFinite(比例) || 比例 <= 0 || 比例 >= 1) ? "中间帧位置须大于0%且小于100%" : "");
         for (const [键, 框] of [["首帧", 首帧框], ["尾帧", 尾帧框], ["中间帧", 中间帧框]]) {
             const 当前 = refs[键] || "";
@@ -278,6 +303,8 @@ export function 创建编辑页面板(编辑页, 上下文) {
             框.sel.value = 当前;
             刷新帧预览(框);
         }
+        const 段 = 段组[状态.取("选中段")];
+        比例模式sel.value = 段?.i2v比例模式 || "裁剪";
     }
 
     function 写当前段帧(键, 名) {
@@ -306,6 +333,7 @@ export function 创建编辑页面板(编辑页, 上下文) {
         首尾帧区.style.visibility = (码 === "i2v" || 码 === "fl2v") ? "visible" : "hidden";
         尾帧框.盒.style.visibility = (码 === "fl2v") ? "visible" : "hidden";
         中间帧框.盒.style.visibility = (码 === "fl2v") ? "visible" : "hidden";
+        比例模式盒.style.visibility = (码 === "i2v") ? "visible" : "hidden";
         // 参考区仅 t2v 隐藏（纯文生无需参考）；i2v/fl2v 也要显示——上传首/尾帧候选图
         参考区.盒.style.visibility = (码 === "t2v") ? "hidden" : "visible";
         // 「全段共用」开关只在 参考生视频家族(r2v/v2v/rv2v) 显示：这几类每段吃参考素材，
@@ -349,9 +377,9 @@ export function 创建编辑页面板(编辑页, 上下文) {
         // 无绑定节点时也渲染默认（t2v）界面，使「未加节点展开」与「加节点并绑定后」外观一致：
         // 六个任务胶囊（t2v 高亮）+ 空素材/空提示词 + 按 t2v 联动显隐（参考区/首尾帧隐藏）。
         const 选项 = 节点 ? (取widget(节点, "任务类型")?.options?.values || []) : 默认任务标签;
-        // 任务类型只读一次：既喂 类型选择.设值，又喂 刷新显隐（后者无参时会再读一遍 widget）。
-        // 无节点时取 默认任务标签[0]（＝t2v 标签），与原来 刷新显隐() 走 任务码("") 回退 t2v 等价。
-        const 任务 = 节点 ? 真源.读任务类型(节点) : 默认任务标签[0];
+        // 切段只回填段级任务；全局默认仅在用户主动切换任务时写入。
+        const 段任务 = String(seg.task ?? "").trim().toLowerCase();
+        const 任务 = 节点 ? (选项.find(标签 => 任务码(标签) === 段任务) || 真源.读任务类型(节点)) : 默认任务标签[0];
         类型选择.设选项(选项);
         类型选择.设值(任务);
         提示词.设值(seg.prompt || "");

@@ -34,15 +34,8 @@ function 注入样式() {
     s.textContent = `
       .lvp-状态栏{display:flex;flex-direction:column;font:11px system-ui;color:var(--fg-color,#ddd)}
       .lvp-把手{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 10px;cursor:pointer;user-select:none;background:var(--comfy-menu-bg,#2b2b2b);border-radius:8px}
-      /* 宿主底栏是 grid 的 auto 行（高度＝内容高）：既不能用 height:100%（父级无确定高度会退化 auto），
-         也不能完全放开（段卡一多底栏就吃掉画布），故按视口比例夹取。
-         下限 195px＝AI规划页左列 brief 表单在 11px 字号下的实测内容高（180 时末两格仍差 3px 会画到圆角框外，
-         左列已无滚动兜底；用户明确拒绝"把字缩到 10px 换矮面板"，故改为抬下限）。
-         上限 260px＝提示词编辑页三列的实测内容高：左列参考区素材框固定 206 内容＋8 内距＋2 边框＝216，加组头 20
-         ＋间隙 4＝240（绑定真实段数据时实测 246.3），再加页面上下内距 6＋6 与主体上边框 1＝259.3。左右两列都是
-         内容定高、顶端对齐（只有中间提示词列带 flex:1 吸收器），面板再高也只在这两列底部多出空白带，故按内容封顶；
-         再低 1px 参考区就要内滚（滚动条方案已被用户否掉）。 */
-      .lvp-主体{display:none;padding:0;background:var(--comfy-menu-secondary-bg,#232323);border-top:1px solid var(--border-color,#3a3a3a);height:clamp(195px,26vh,260px);overflow:hidden}
+      /* 宿主 grid 的 auto 行没有确定高度；显式夹取限制画布占用，260px 是布局上限而非内容最小高度。 */
+      .lvp-主体{display:none;padding:0;background:var(--comfy-menu-secondary-bg,#232323);border-top:1px solid var(--border-color,#3a3a3a);height:clamp(225px,26vh,260px);overflow:hidden}
       .lvp-主体.展开{display:flex;flex-direction:column}
       .lvp-把手标签{display:flex;align-items:center;gap:2px;flex:1}
       .lvp-把手标签 .lvp-tab{flex:1;text-align:center;padding:2px 14px;cursor:pointer;border:none;background:transparent;color:var(--p-text-muted-color,#8c8c8c);font:11px system-ui;border-radius:6px;position:relative;overflow:hidden;transition:background .15s,color .15s}

@@ -146,14 +146,10 @@ function 注入样式() {
       @container (max-width:60px){.lvp-ct-区间:not(:focus-within){display:none}.lvp-ct-头:focus-within .lvp-ct-序,.lvp-ct-头:focus-within .lvp-ct-角色{display:none}}
       @container (max-width:44px){.lvp-ct-角色{display:none}.lvp-ct-词{-webkit-line-clamp:1}}
       @container (max-width:34px){.lvp-ct-把手{display:none}}
-      /* 宽卡（字幕/标题都还在显示的那一档）按卡高逐级多显几行，否则高卡只有两行字、下方整片空白。
-         容器查询量内容盒（＝卡高−边框2+内边距6）；行高 13.5、卡内固定开销≈34 ⇒ 4/7/10/14/19 行。
-         min-width 条件不可省：没有它，窄卡的 2 行/1 行降级会被下面这几条按高度抬回去。 */
+      /* min-width 按内容盒与窄卡档互补，避免高度查询覆盖窄卡的 2 行/1 行降级。 */
       @container (min-height:100px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:4}}
       @container (min-height:140px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:7}}
       @container (min-height:180px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:10}}
-      @container (min-height:240px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:14}}
-      @container (min-height:300px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:19}}
       .lvp-ct.忙 .lvp-ct-行,.lvp-ct.忙 .lvp-ct-卷{pointer-events:none;opacity:.55}`;
     document.head.appendChild(s);
     样式已注入.v = true;
@@ -461,7 +457,7 @@ export function 创建剪辑时间轴(容器, ctx) {
         const 标3 = document.createElement("span"); 标3.className = "lvp-ct-标"; 标3.textContent = "模型";
         模型sel = document.createElement("select"); 模型sel.className = "lvp-ct-选"; 模型sel.title = "本次提示词生成使用的 API 模型";
         b提示 = 建钮("✨ AI生成提示词", "主", "对启用段生成提示词：全部启用时整批生成；部分启用时其余段作只读上下文，仅回写启用段", (e) => 生成提示词(e.currentTarget));
-        b填充 = 建钮("⬆ 填充节点", "", "把草稿段一键填充到节点时间轴（覆盖确认后写「时间轴数据」用于生成）", 填充节点);
+        b填充 = 建钮("⬆ 填充节点", "", "把启用草稿段一键填充到节点时间轴（覆盖确认后写「时间轴数据」用于生成）；非全启用时仅填充启用段并闭拢时间，全部启用时填充所有段", 填充节点);
         生成.append(标1, 技能sel, 标2, 辅助sel, 标3, 模型sel, b提示, b填充);
         生成行El = 生成;
         return 生成行El;
@@ -662,7 +658,7 @@ export function 创建剪辑时间轴(容器, ctx) {
         重排时间(g);   // ripple 闭拢
         写草稿(g); 选择集 = new Set(); 设active(Math.max(0, Math.min(active(), g.length - 1))); 渲染();
     }
-    // 启用管理（item2）：只影响「AI生成提示词」覆盖范围，与节点侧视频生成的 run 开关无关。
+    // 启用管理（item2）：影响「AI生成提示词」覆盖范围与「填充节点」的填充范围，与节点侧视频生成的 run 开关无关。
     // 触发方式承旧「运行/停」：选中（或多选）后点击切换；未显式置 false 的段一律视为启用（兼容旧草稿无该字段）。
     const 是启用 = (s) => s?.启用 !== false;
     function 切启用() {
@@ -795,11 +791,17 @@ export function 创建剪辑时间轴(容器, ctx) {
         if (忙) return;
         const g = 段组();
         if (!g.length) { await 弹确认("无草稿段", "草稿为空，无可填充内容。"); return; }
+        // 非全启用 → 仅填充启用段并按 ripple 闭拢时间（同手动删除未启用段的落点）；
+        //   全启用（含旧草稿无 启用 字段）→ 原样填充全部段，效果与旧版逐字节一致。
+        const 启用组 = g.filter(是启用);
+        if (!启用组.length) { await 弹确认("无启用段", "所有段均未启用，请先「启用」或「全部启用」至少一段。"); return; }
+        const 待填 = JSON.parse(JSON.stringify(启用组));   // 先深拷再改 start/end，绝不回写草稿真源
+        if (启用组.length !== g.length) 重排时间(待填);
         收平移?.();
         忙 = true; 根.classList.add("忙");
         b提示.disabled = b填充.disabled = true;
         try {
-            await 应用规划(JSON.parse(JSON.stringify(g)));   // 复用框架层：覆盖确认 → 写时间轴数据 → 全刷
+            await 应用规划(待填);   // 复用框架层：覆盖确认 → 写时间轴数据 → 全刷
         } finally {
             忙 = false; 根.classList.remove("忙");
             渲染();

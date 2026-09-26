@@ -22,6 +22,7 @@ class SegmentPlan:
     start: float = 0.0
     end: float = 默认段秒
     run: bool = True
+    i2v比例模式: str = "裁剪"
 
 
 @dataclass(frozen=True)
@@ -86,5 +87,6 @@ def 解析时间轴(raw: "str | None") -> DirectorPlan:
             refs=refs,
             start=start, end=end,
             run=_解析运行值(s.get("run")),
+            i2v比例模式=str(s.get("i2v比例模式") or "裁剪"),
         ))
     return DirectorPlan(segments=tuple(segs))
