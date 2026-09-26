@@ -17,6 +17,8 @@ All the actual generation work is done by ComfyUI's official MiniMax H3 nodes. T
   - [Step 3: AI one-click planning (optional)](#step-3-ai-one-click-planning-optional)
   - [Step 4: Edit the timeline](#step-4-edit-the-timeline)
   - [Step 5: Click Queue Prompt to start](#step-5-click-queue-prompt-to-start)
+- [Independent refinement and upscaling (optional)](#independent-refinement-and-upscaling-optional)
+- [Progressive resolution sampling (optional)](#progressive-resolution-sampling-optional)
 - [API model setup](#api-model-setup)
 - [Skills & Knowledge Base](#skills--knowledge-base)
 - [Presets](#presets)
@@ -67,7 +69,7 @@ It has 5 inputs:
 
 For the two model inputs, connect whichever one your tasks need. If you use both kinds of tasks, connect both.
 
-Node outputs: image, audio, frame rate, total frame count, and a report string. Plug them straight into `SaveVideo` or `PreviewVideo`.
+The first five outputs remain image, audio, frame rate, total frame count, and report; existing save and preview connections stay unchanged. The sixth output, `初采产物` (first-pass artifact), is for optional refinement and upscaling. Leave it disconnected if you do not need a second pass.
 
 ### Step 2: Open the bottom status bar
 
@@ -96,7 +98,7 @@ If you don't want to fill segments by hand, follow this flow (first-time users n
 4. **Zoom in for precision (view-only)**: the toolbar's "Fit / Zoom out / slider / Zoom in" magnifies the track up to **1–40×**, with the current factor shown right next to it. You can also **scroll-wheel to zoom** directly on the track (Ctrl+wheel / trackpad pinch is more sensitive), **drag the time ruler to pan**, or use the horizontal scrollbar. Ruler ticks auto-step down as you zoom in (hours → minutes → seconds → 0.1 s), so even a feature-length draft can be aligned segment by segment. Zoom only changes view width: it never touches segment start/end times, never writes the clip draft, the node timeline, or the cache signature — trim / split / playhead scrubbing / multi-select / reordering stay pixel-accurate at any factor.
 5. **"✨ AI Generate Prompts"**: the LLM rewrites each segment's full visual prompt based on the brief and skill docs, automatically switching modes by enable state — when **all segments are enabled** it batch-generates as before, covering only *enabled* segments (managed via Enable / Enable all / Disable all on the toolbar); when **only some are enabled**, all segments are uploaded as **read-only context** and the server **rewrites only the enabled segments** (disabled segments keep their original prompts and don't need to be count-matched) — whatever segment goes out is filled back into that same segment. The Skill/Auxiliary/Model used for generation sit in the row above the track. Write-back is mapped by segment identity — if one segment fails it **keeps its original draft and is flagged** (never silently overwriting with the old wording as if it were a new result); failed segments trigger a confirmation.
 6. **Per-segment fine editing**: select a card and edit Title / Structure / Subtitle / Prompt in the right column, kept in sync with the matching card blocks ("Structure" is the UI label for the narrative-beat field shown on the card).
-7. **"⬆ Fill into node"**: when satisfied, one click writes the draft segments into the node's `时间轴数据` (timeline data) field (with an overwrite confirmation). From there it behaves like a normal timeline.
+7. **"⬆ Fill into node"**: when satisfied, one click writes the **enabled** draft segments into the node's `时间轴数据` (timeline data) field (with an overwrite confirmation; unless everything is enabled, only enabled segments are filled and their times closed up seamlessly, disabled ones stay in the draft — with everything enabled the result is the same as before). From there it behaves like a normal timeline.
 
 > LLM calls go over out-of-process HTTP (same code for cloud and local), **using zero VRAM** and never touching the sampling/execution chain. Planning failures surface as explicit errors — demo content is never fabricated.
 
@@ -121,6 +123,55 @@ Generation runs in two stages:
 Splitting it this way frees up the GPU during decoding. Without it, a 16 GB card running long segments at high resolution would be more than ten times slower.
 
 The status bar shows segment-level progress like "Generating 3/7".
+
+---
+
+## Independent refinement and upscaling (optional)
+
+Connect the planner's sixth output, `初采产物`, to **精修与放大** (Refine and Upscale), then connect its results to a save node. You can keep the original first-pass save branch. Wire models, CLIP and VAEs separately into the new node; the artifact carries no models.
+
+- **Refine every segment before upscaling**: refinement strength defaults to 0.20; set it to 0 to skip refinement. The first-pass full IMAGE is not re-encoded, and there is no third sampling pass after upscaling.
+- **Three upscaling modes**: Lanczos, pixel model and H3 latent; scale is 1–4 with target dimensions aligned to 32. The report shows actual dimensions. Pixel mode needs a connected model; H3 mode needs compatible weights you supply yourself — take a `.safetensors` from <https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler> into `ComfyUI/models/latent_upscale_models/` (the same file the Progressive resolution sampling section below uses). Nothing is downloaded automatically, and a `.pth` in that folder will not appear in the dropdown.
+- **Keep sound and timing**: reuse the final first-pass audio, frame rate and frame count without audio re-decoding or speed changes; source segments and references remain unchanged. The new node has separate overall progress without replacing first-pass segment progress.
+- **Separate caches**: refinement and H3 upscaling caches are independent of the first-pass cache. The original Clear Segment Cache button does not clear them. Increase the new node's cache invalidation version after replacing weights.
+
+### Default: direct in-memory connection
+
+`长视频规划师 → 精修与放大 → Save`
+
+Without a handoff node, the artifact stays in memory within one host task. No handoff files, split tasks or global deep-cleanup request are added. The host may still retain the complete first-pass IMAGE.
+
+### Optional: insert 初采交接与清理
+
+`长视频规划师 → 初采交接与清理 → 精修与放大 → Save`
+
+Only a handoff node in an effective output dependency chain enables the confirmation dialog and three phases: **A first pass, saving and per-segment disk handoff → C global-cleanup request → B gated, per-segment second pass and saving**. No manual reader node is needed; a disconnected handoff node does not enable the split.
+
+- Use a dedicated idle queue. Do not submit from other tabs or APIs concurrently. Cleanup affects host models and in-memory execution caches, not saved videos, handoff files or disk caches.
+- Failure anywhere in A prevents C/B. `C_REQUESTED` means requested, not completed. Second-pass loaders and the business graph are expanded only after B's gate passes.
+- The handoff node shows status and offers Cancel Handoff and Retry Second Pass Only. Retry needs the current task's control capability, uses current graph parameters, repeats C/B and may save duplicates. Reloading the page does not automatically restore control or select the latest artifact.
+- Only one explicit handoff chain is supported. Batch submissions, partial execution, cross-phase connections and unknown shared side-effect nodes are refused. Ordinary `/prompt` calls do not split automatically; API clients must use the handoff endpoints.
+
+**Validation boundary:** CPU contracts, isolated host-executor integration and frontend runtime tests exist. Real browser interaction, GPU quality/peak memory, actual global unloading and real save-plugin combinations remain unverified. Streaming segments does not eliminate the final full IMAGE memory requirement; estimates exclude some model/activation costs and cannot guarantee freedom from OOM.
+
+---
+
+## Progressive resolution sampling (optional)
+
+Each segment runs its first few denoising steps on a reduced canvas, the latent is lifted to the target resolution, and the remaining steps run at full size. **Total denoising steps stay the same** — what shrinks is the cost of those early steps. Leave it disconnected and everything behaves exactly as before.
+
+**Wiring**: add the **SelfLift配置** (Progressive Sampling) node and connect its 配置 (config) output to the `SelfLift配置` input at the bottom of the main node. Disconnected = single-stage sampling, segment cache untouched.
+
+- **低清缩放** (downscale ratio, 0.25–0.95, default 0.5): the low-resolution canvas = target canvas × this value, aligned to a multiple of 32. At 0.5 the early steps carry roughly a quarter of the video tokens.
+- **高清步数** (full-res steps, default 6): how many steps run at the target resolution; the low-res steps = the main node's 步数 (steps) minus this value. Both stages need at least one step.
+- **The sampler must be `euler`**: any other choice fails before sampling starts and names the offending parameter instead of quietly falling back to normal sampling.
+- **Lift quality comes from the H3 latent upscaler weights**: download from <https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler> (by LBH-123-AI, Apache-2.0 — take `fp16.safetensors` or `bf16.safetensors` under `minimax_h3_latent_upscaler_3d_conv_v1/`, about 691 MB each) and put the file into `ComfyUI/models/latent_upscale_models/`; the plugin never downloads it. ⚠️ Only `.safetensors` files are listed — a `.pth` in that folder will not appear in the dropdown.
+- **Without a weight file you must tick 允许插值降级** (allow interpolation fallback) to lift by bilinear interpolation instead. In the reference author's own same-seed comparison this route shows **visible artifacts**, not merely a softer picture — use it to check framing and motion, not as a finished shot.
+- **Duration, frame count and audio are unaffected**: frames come from the timeline span and the 24 fps base, never from resolution; the lift only changes the spatial size.
+- **Cache behaviour**: installing this version does not invalidate your existing segment caches. But once connected, changing any of 低清缩放 / 高清步数 / 放大权重 re-runs every segment — those values are part of each segment's cache fingerprint.
+- **Invalid parameters fail up front**: steps below 2, 高清步数 out of range, the ratio outside its interval, a ratio that rounds down to no actual reduction, or neither a weight nor the fallback ticked — each error names the parameter, nothing silently reverts.
+
+**Is it worth it**: set the `H3_计时=1` environment variable and run the same material with the same seed twice — once disconnected (full-res `euler`), once connected — then compare the 合计 (total) in the `段N 采样计时` log lines; a connected run also prints a `段N 渐进采样细分` line splitting low-res sampling, the lift and full-res sampling. ⚠️ Speed-up factor, lifted-image quality and peak VRAM still have no GPU measurements.
 
 ---
 
@@ -360,20 +411,52 @@ Set the environment variable `H3_计时=1` and the log breaks each segment down 
 
 ## Changelog
 
+**2026-09-26**
+
+- Cancelling the handoff confirmation no longer raises an error, and nothing gets queued.
+- The "Overall progress" readout is display-only now and is no longer saved into workflow files.
+- A cleanup failure now pauses the job with a retryable state instead of silently stalling.
+- Half-step scales such as 1.25x no longer leave a dimension unchanged; results always round up to the 32-pixel grid.
+- A leftover temporary cache file can no longer mask the real error, so failures report their original cause.
+- Batch queueing, per-phase timeouts and path checks were tightened; false permission-boundary rejections and reused queue numbers are fixed.
+- Editing the canvas right after confirming a handoff no longer loses the task — it can still be polled and cancelled.
+- A broken cache file is now named in the error message, together with a note that the "Clear segment cache" button does not cover that folder.
+- If a handoff write fails halfway, the partial output directory is only reported; nothing is deleted automatically.
+- A 500 from the handoff API now leaves the full traceback in the server log for diagnosis.
+- Reloading this plugin without restarting ComfyUI no longer registers the same nodes twice.
+- Added the optional **SelfLift配置** (Progressive Sampling) node: when connected, each segment denoises a few steps on a low-resolution canvas, lifts to the target size, then runs the remaining steps — total steps stay the same. Without the connection nothing changes.
+- Enabling it requires the planner's `采样器` (Sampler) to be `euler`; invalid settings fail before sampling and name the offending parameter instead of quietly falling back.
+- Lifting quality depends on H3 latent upscale weights — the download link and target folder are now in both the Independent refinement and Progressive resolution sampling sections above; with no weight file you must tick 允许插值降级, and that route gives visible artifacts rather than just softer detail.
+- Existing segment caches are not invalidated by this change; the actual time saved has not been measured on GPU yet.
+- "⬆ Fill Nodes" on the status-bar AI planning page now fills by enabled segments: unless all segments are enabled, only the enabled ones are written into the node timeline with their times closed up seamlessly, while disabled segments stay untouched in the draft; with everything enabled the result is identical to before, and with everything disabled it prompts and writes nothing.
+- This change adds 3 targeted tests; the frontend async-writeback isolation suite passes 292/292 (up from 289).
+- Image-to-video now has a **比例模式 (Aspect mode)** dropdown (shown only for the i2v task): choose **Generate at the image's original aspect** or **Crop to the set aspect**, instead of always stretching the first frame to the output resolution.
+- With **原图 (Original)**, the segment's canvas follows the first frame's aspect ratio; the global **输出分辨率 (Output resolution)** no longer applies to that segment, while the absolute size stays bounded by the **百万像素 (Megapixels)** budget.
+- With **裁剪 (Crop)**, the first frame is center-cropped to the largest region matching the set resolution's aspect before use as input.
+- This applies only to pure i2v; first/last-frame (fl2v) keeps the original full-frame stretch so mismatched frame aspects never cause misalignment.
+- ⚠️ Cache format bumped — all previously generated segments are invalidated; the first run must regenerate everything, so allow extra time.
+
+**2026-09-25**
+
+- Added Refine and Upscale to refine first-pass segments before upscaling, keeping existing first-pass connections and audio unchanged.
+- Optionally insert First-pass Handoff and Cleanup to save artifacts, clean across tasks and run the second pass after confirmation; without it, the direct in-memory path stays unchanged.
+- The handoff node shows status and offers cancel or second-pass-only retry; reloading does not restore control automatically, and retries may save duplicates.
+- Automated and isolated host tests exist; real browser interaction, GPU output and global-cleanup behavior still need validation.
+
 **2026-09-24**
 
-- With "Gradient Transition" enabled, the next segment continues right after the last frame of the previous one, so joints no longer look abrupt.
-- Fixed each seam silently losing 4 frames; the finished video now matches the planned duration exactly.
-- A segment with no audio gets an equal-length silence filled in automatically, so sound and picture no longer drift apart.
-- The environment is now auto-checked before a continuation; if it's incompatible you get a readable error up front instead of a mid-run failure.
+- With "Gradient Transition" enabled, the next segment inherits the previous ending's picture and sound and adjusts its opening colors; the actual transition still needs sample-video validation.
+- Each seam no longer loses an extra 4 frames, but frame-grid alignment and trimming repeated context can still change the total duration.
+- Audio is padded with silence or trimmed to the actual video frame count, including single-segment output.
+- Continuation checks report the condition-compatibility issues they cover, but do not replace testing actual generation.
 - ⚠️ The cache format was upgraded: all previously generated segments are invalid and the first run must be done from scratch, so allow extra time.
 - Image quality and speed have not been verified on real hardware yet; feedback welcome.
 - The "Subtitle" box in the AI planning page's right column is shorter now, handing the freed space to the prompt box below.
-- The bottom panel got shorter and the empty band under it narrowed; card text now shows more lines as cards grow taller.
+- The bottom panel follows the window height within 225–260px, and clip cards show more prompt text when space allows.
 - The button bars above the timeline and prompt editor stay on one row and slide sideways when the window is narrow, instead of stacking into rows.
-- Fixed the AI planning page's left column spilling out of its box in short windows; text size is unchanged and no vertical scrollbar appears.
-- The left column's info lines now show a single line with the full text on hover, and pressing "Generate plan" clears them first.
-- Fixed the empty band at the bottom of the prompt editor page when the window is tall.
+- The AI planning form now leaves enough room for long messages and dropdowns without making the text smaller.
+- Info messages stay on one line with full text on hover; "Generate plan" first clears old messages and their tooltips.
+- The 260px height cap reduces empty space in tall windows, but does not promise to remove all of it.
 - Fixed the clip timeline looking blank before any plan is generated; its ruler is always shown now, so the timeline is always there.
 - The first/last/middle-frame dropdowns on the prompt editor got slimmer, so the left and right columns are now about the same width.
 - The three material boxes on the prompt editor now center their content; the scrollbar no longer takes up space inside the box, and the wheel still scrolls when there are many items.
@@ -383,7 +466,14 @@ Set the environment variable `H3_计时=1` and the log breaks each segment down 
 - The "@" reference-material list can now be dismissed three ways: click "@" again, click anywhere else on the page, or pick an item — no more being forced to select one.
 - "All-segments shared" and "Clear materials" now stack in two rows instead of crowding one row, saving horizontal space in the material area.
 - Rearranged the AI Planning tab's left column: Topic on its own row, then Total duration + Per-segment, Segment count on a full-width row (input widened so the number is no longer clipped), Task + Hook, Language + Style, Platform + Audience, Skill + Auxiliary, and finally Model + Generate plan.
-- Test baseline: `pytest 测试/` **1067 passed**, frontend `node --test 测试/*.test.mjs` **373 passed**, ruff clean.
+- Fixed stale clear confirmations removing materials after node reloads, late uploads bringing cleared materials back, and holding "@" on the second click leaving its list open.
+- Fixed cache information being squeezed out of narrow timelines, and sliding the button bar sideways now closes the "@" list.
+- Fixed labels in the AI planning form, while the Segment count input still spans the full row.
+- Hidden middle frames no longer interfere with splitting or caching for other tasks, while replacing a referenced file under the same name still triggers a cache check.
+- Switching between mixed-task segments now shows frame controls for the selected segment, and valid near-endpoint middle-frame positions no longer display as 0% or 100%.
+- Loading a plan also reports missing materials referenced only by its clip draft, without changing references or their order.
+- This middle-frame review adds 23 frontend and 39 backend regression tests; all 412/1135 tests and 41 isolated-browser checks pass, while real image previews and GPU output remain unverified (feature baseline §3.15; earlier batch counts are retained below).
+- Test baseline: frontend `node --experimental-vm-modules --test 测试/*.test.mjs` adds **7** tests, **382→389 passed / 0 failed**; `pytest 测试/` **1067 passed / 2 existing warnings**; `ruff check .` passed.
 
 **2026-09-23**
 
@@ -492,7 +582,7 @@ Set the environment variable `H3_计时=1` and the log breaks each segment down 
 
 - **Bug reports**: please include your ComfyUI version, GPU model and VRAM, H3 model version, the full error text from the red panel, and the timeline JSON (feel free to redact).
 - **Feature requests**: open an Issue.
-- **Pull requests**: keep `pytest 测试/` at the 1067-passed baseline and the front-end suite `node --test 测试/*.test.mjs` at 373 passing, and match the existing code style.
+- **Pull requests**: keep `pytest 测试/` at the 1067-passed baseline and the front-end suite `node --test 测试/*.test.mjs` at 389 passing, and match the existing code style.
 
 ---
 
@@ -547,7 +637,7 @@ If this plugin helps you:
 
 - **Star this repo** ⭐
 - **Share your work** — videos made with this plugin are welcome in the Issues.
-- **Sponsor** 
+- **Sponsor**
 <img width="400" height="500" alt="微信图片_20260920163034" src="https://github.com/user-attachments/assets/47f64c6e-cc45-4395-9b9e-29f464d12df2" />
 <img width="400" height="500" alt="微信图片_20260920163043" src="https://github.com/user-attachments/assets/7bfb521a-6f24-4104-89c0-016dcf74834b" />
 
