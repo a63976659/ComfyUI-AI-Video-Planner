@@ -92,13 +92,15 @@ app.registerExtension({
         // 「编辑」按钮：toggle——已绑定本节点且展开则折叠，否则绑定并展开
         // 防重复：若节点已有编辑 widget（重载/热更新场景），跳过
         if (!(node.widgets || []).some(w => w.name === "编辑")) {
-            node.addWidget("button", "编辑", null, () => {
+            const 编辑钮 = node.addWidget("button", "编辑", null, () => {
                 const p = 确保面板();
                 if (!p) return;
                 if (p.取节点() === node && p.状态.取("展开")) { p.收起(); return; }
                 p.绑定节点(node);
                 p.展开();
-            });
+            }, { serialize: false });
+            // 纯前端控件：graphToPrompt 按 widget 名把值写进 prompt inputs，未声明的键会让交接图判定整图拒绝；存档也不占 widgets_values 槽（08 §1 自建控件口径）。
+            编辑钮.serialize = false;
         }
         // 挂载节点内多段时间轴（DOM 富 widget）
         // 宿主不等待 nodeCreated：同步挂载，默认尺寸必须在 configure 恢复保存尺寸之前设置。

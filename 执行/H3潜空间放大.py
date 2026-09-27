@@ -106,6 +106,25 @@ def 列H3放大权重():
     return ["未选择"] + sorted(n for n in names if n.lower().endswith(".safetensors"))
 
 
+def 列兼容H3放大模型():
+    """只列「加载端真正认得」的 H3 放大模型：判据与 预检H3放大权重 完全同一套，故清单里的名字
+    不会在采样前才被拒（同一目录常被别的扩展放别的 latent 放大 safetensors，那些不适用本流程）。
+
+    单个文件读不了（损坏、无权限、目录被挪走）一律跳过而不抛：清单是 UI 便利，
+    不该让节点注册因一个坏文件整体失败；真选中要跑时仍由 预检H3放大权重 硬失败点名。"""
+    from safetensors import SafetensorError
+
+    兼容 = []
+    for name in (n for n in 列H3放大权重() if n != "未选择"):   # 扩展名与排序沿用全量清单那一份
+        try:
+            形状, _ = _读头部(_权重路径(name))
+            _头部配置(形状)
+        except (OSError, ValueError, SafetensorError):
+            continue
+        兼容.append(name)
+    return ["未选择"] + 兼容
+
+
 def _权重路径(name):
     import folder_paths
 
@@ -176,21 +195,28 @@ def _头部配置(shapes):
     return config
 
 
+def _读头部(path):
+    from safetensors import safe_open
+
+    with safe_open(path, framework="pt", device="cpu") as file:
+        keys = list(file.keys())
+        prefix = "upscaler." if keys and all(k.startswith("upscaler.") for k in keys) else ""
+        shapes = {}
+        for key in keys:
+            header = file.get_slice(key)
+            if header.get_dtype() not in ("F32", "F16", "BF16"):
+                raise ValueError(f"H3权重不支持此dtype：{key}")
+            shapes[key[len(prefix):]] = tuple(header.get_shape())
+    return shapes, prefix
+
+
 def 预检H3放大权重(name):
-    from safetensors import safe_open, SafetensorError
+    from safetensors import SafetensorError
 
     path = _权重路径(name)
     try:
         digest = 文件摘要(path)
-        with safe_open(path, framework="pt", device="cpu") as file:
-            keys = list(file.keys())
-            prefix = "upscaler." if keys and all(k.startswith("upscaler.") for k in keys) else ""
-            shapes = {}
-            for key in keys:
-                header = file.get_slice(key)
-                if header.get_dtype() not in ("F32", "F16", "BF16"):
-                    raise ValueError(f"H3权重不支持此dtype：{key}")
-                shapes[key[len(prefix):]] = tuple(header.get_shape())
+        shapes, prefix = _读头部(path)
         config = _头部配置(shapes)
         if 文件摘要(path) != digest:
             raise ValueError("H3放大权重在预检期间发生变化")

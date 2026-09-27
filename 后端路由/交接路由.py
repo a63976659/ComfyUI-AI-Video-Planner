@@ -82,11 +82,8 @@ async def _请求(request, required, optional=()):
         raise web.HTTPBadRequest() from None
     if type(value) is not dict or not set(required) <= value.keys() or value.keys() - set(required) - set(optional):
         raise web.HTTPBadRequest()
-    for field in ("job_id", "client_id", "request_id"):
+    for field in ("client_id", "request_id"):
         if field in value and (type(value[field]) is not str or not value[field].strip() or len(value[field]) > 256):
-            raise web.HTTPBadRequest()
-    for field in ("attempt", "version"):
-        if field in value and (type(value[field]) is not int or value[field] < 0):
             raise web.HTTPBadRequest()
     for field in ("output", "workflow", "options"):
         if field in value and type(value[field]) is not dict:
@@ -115,22 +112,5 @@ def 注册路由():
     async def 状态(request):
         owner, capability = _所有者(request), _能力(request)
         return _协调器().取交接状态(request.match_info["job_id"], owner=owner, capability=capability)
-
-    @routes.post("/lvp/handoff/cancel")
-    @_边界
-    async def 取消(request):
-        owner, capability = _所有者(request), _能力(request)
-        data = await _请求(request, ("job_id", "attempt", "version"))
-        return _协调器().取消交接任务(data["job_id"], data["attempt"], data["version"],
-                                     owner=owner, capability=capability)
-
-    @routes.post("/lvp/handoff/retry")
-    @_边界
-    async def 重试(request):
-        owner, capability = _所有者(request), _能力(request)
-        data = await _请求(request, ("job_id", "attempt", "version", "output", "workflow"), ("options",))
-        return await _协调器().重试交接任务(
-            data["job_id"], data["attempt"], data["version"], data["output"], data["workflow"],
-            owner=owner, capability=capability, options=data.get("options"))
 
     _已注册 = True

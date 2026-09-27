@@ -227,7 +227,8 @@ export function 挂载时间轴(node, 面板) {
     // computedHeight＝框架弹性布局分给本 widget 的剩余节点高（拉高节点→时间轴跟着变高）。
     // 其余样式全在 .lvp-时间轴 里：内联样式写不了 :hover/伪元素/过渡，是旧版「像调试线框」的主因。
 
-    const widget = node.addDOMWidget("时间轴", "dom", 根, { getValue: () => "", setValue: () => {}, getMinHeight: () => 面板高 });
+    const widget = node.addDOMWidget("时间轴", "dom", 根, { getValue: () => "", setValue: () => {}, getMinHeight: () => 面板高, serialize: false });
+    widget.serialize = false;   // 纯展示 widget：graphToPrompt 按 widget 名写 prompt inputs，未声明的「时间轴」会让交接图判定整图拒绝；存档也不占 widgets_values 槽（08 §1 自建控件口径）。
     // 故意不设 widget.computeSize：布局引擎把「有 computeSize」的 widget 当固定高，只有「仅有
     // computeLayoutSize」的才弹性。DOMWidgetImpl 自带 computeLayoutSize（读 --comfy-widget-min-height
     // 作下限），于是时间轴成为节点内唯一弹性 widget——节点被拉高时剩余空间全归它，拉多高填多高。

@@ -17,7 +17,7 @@ All the actual generation work is done by ComfyUI's official MiniMax H3 nodes. T
   - [Step 3: AI one-click planning (optional)](#step-3-ai-one-click-planning-optional)
   - [Step 4: Edit the timeline](#step-4-edit-the-timeline)
   - [Step 5: Click Queue Prompt to start](#step-5-click-queue-prompt-to-start)
-- [Independent refinement and upscaling (optional)](#independent-refinement-and-upscaling-optional)
+- [Independent upscaling and redrawing (optional)](#independent-upscaling-and-redrawing-optional)
 - [Progressive resolution sampling (optional)](#progressive-resolution-sampling-optional)
 - [API model setup](#api-model-setup)
 - [Skills & Knowledge Base](#skills--knowledge-base)
@@ -69,7 +69,7 @@ It has 5 inputs:
 
 For the two model inputs, connect whichever one your tasks need. If you use both kinds of tasks, connect both.
 
-The first five outputs remain image, audio, frame rate, total frame count, and report; existing save and preview connections stay unchanged. The sixth output, `初采产物` (first-pass artifact), is for optional refinement and upscaling. Leave it disconnected if you do not need a second pass.
+The first five outputs remain image, audio, frame rate, total frame count, and report; existing save and preview connections stay unchanged. The sixth output, `初采产物` (first-pass artifact), is for the optional Upscale and Redraw node. Leave it disconnected if you do not need a second pass.
 
 ### Step 2: Open the bottom status bar
 
@@ -126,30 +126,30 @@ The status bar shows segment-level progress like "Generating 3/7".
 
 ---
 
-## Independent refinement and upscaling (optional)
+## Independent upscaling and redrawing (optional)
 
-Connect the planner's sixth output, `初采产物`, to **精修与放大** (Refine and Upscale), then connect its results to a save node. You can keep the original first-pass save branch. Wire models, CLIP and VAEs separately into the new node; the artifact carries no models.
+Connect the planner's sixth output, `初采产物`, to **放大和重绘** (Upscale and Redraw), then connect its results to a save node. You can keep the original first-pass save branch. Wire models, CLIP and VAEs separately into the new node; the artifact carries no models. ⚠️ The node's internal name is still 精修与放大 — that is the name saves and links use — while the interface shows 放大和重绘.
 
-- **Refine every segment before upscaling**: refinement strength defaults to 0.20; set it to 0 to skip refinement. The first-pass full IMAGE is not re-encoded, and there is no third sampling pass after upscaling.
-- **Three upscaling modes**: Lanczos, pixel model and H3 latent; scale is 1–4 with target dimensions aligned to 32. The report shows actual dimensions. Pixel mode needs a connected model; H3 mode needs compatible weights you supply yourself — take a `.safetensors` from <https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler> into `ComfyUI/models/latent_upscale_models/` (the same file the Progressive resolution sampling section below uses). Nothing is downloaded automatically, and a `.pth` in that folder will not appear in the dropdown.
+- **Upscaling only by default**: the 重绘开关 (Redraw switch) is off, so no models or CLIP are needed and the redraw widgets stay hidden. Switch it on and 重绘强度 (strength), 重绘步数 (steps), 重绘种子 (seed), 采样器 (sampler) and 调度器 (scheduler) appear below it; strength and steps are both sliders (strength 0.1–1 in 0.1 increments, default 0.20; steps 2–50, default 20); strength no longer reaches 0 — to skip redrawing entirely you leave the switch off, which sends strength 0 to the back-end. Redrawing revisits every segment at its original size first and upscales afterwards; the first-pass full IMAGE is never re-encoded and there is no third sampling pass after upscaling.
+- **Three upscaling modes, and only the matching weight list is shown**: 放大方式 is ordered H3潜空间 (H3 latent), 像素模型 (pixel model), Lanczos, and **defaults to H3潜空间**. H3 latent shows only the H3放大权重 dropdown, pixel model shows only 像素放大模型, and Lanczos hides both because it needs no model. Scale is a slider too, 1–4 in 0.25 increments (the leftmost notch, 1.0, means no upscaling and asks for no upscale weight), with target dimensions aligned to 32, and the report shows the actual dimensions. H3 mode needs compatible weights you supply yourself — take a `.safetensors` from <https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler> into `ComfyUI/models/latent_upscale_models/` (the same file the Progressive resolution sampling section below uses); nothing is downloaded automatically, and the dropdown lists only the H3 24-channel 3D `.safetensors` files this plugin can actually load, so other upscalers in that folder stay hidden. Pixel weights are picked on the node now too: the dropdown lists the `.pth/.ckpt/.safetensors` files in `ComfyUI/models/upscale_models/`, the same folder and the same models as the official Load Upscale Model node, so you no longer have to wire an extra loader node.
 - **Keep sound and timing**: reuse the final first-pass audio, frame rate and frame count without audio re-decoding or speed changes; source segments and references remain unchanged. The new node has separate overall progress without replacing first-pass segment progress.
-- **Separate caches**: refinement and H3 upscaling caches are independent of the first-pass cache. The original Clear Segment Cache button does not clear them. Increase the new node's cache invalidation version after replacing weights.
+- **Separate caches**: the redraw and upscale caches are independent of the first-pass cache. The original Clear Segment Cache button does not clear them. Increase the new node's 缓存失效版本 (cache invalidation version) after replacing weights.
 
 ### Default: direct in-memory connection
 
-`长视频规划师 → 精修与放大 → Save`
+`长视频规划师 → 放大和重绘 → Save`
 
 Without a handoff node, the artifact stays in memory within one host task. No handoff files, split tasks or global deep-cleanup request are added. The host may still retain the complete first-pass IMAGE.
 
 ### Optional: insert 初采交接与清理
 
-`长视频规划师 → 初采交接与清理 → 精修与放大 → Save`
+`长视频规划师 → 初采交接与清理 → 放大和重绘 → Save`
 
-Only a handoff node in an effective output dependency chain enables the confirmation dialog and three phases: **A first pass, saving and per-segment disk handoff → C global-cleanup request → B gated, per-segment second pass and saving**. No manual reader node is needed; a disconnected handoff node does not enable the split.
+Only a handoff node in an effective output dependency chain enables the three phases: **A first pass, saving and per-segment disk handoff → C global-cleanup request → B gated, per-segment second pass and saving**. No manual reader node is needed; a disconnected handoff node does not enable the split. Queueing no longer asks for a second confirmation — you wired the node in yourself.
 
 - Use a dedicated idle queue. Do not submit from other tabs or APIs concurrently. Cleanup affects host models and in-memory execution caches, not saved videos, handoff files or disk caches.
 - Failure anywhere in A prevents C/B. `C_REQUESTED` means requested, not completed. Second-pass loaders and the business graph are expanded only after B's gate passes.
-- The handoff node shows status and offers Cancel Handoff and Retry Second Pass Only. Retry needs the current task's control capability, uses current graph parameters, repeats C/B and may save duplicates. Reloading the page does not automatically restore control or select the latest artifact.
+- The handoff node has no status display and no buttons; A→C→B runs on its own without further clicks. To stop, use the host queue panel's Stop — first-pass segments already on disk are not lost, just submit again. If phase A never starts, the host queue is blocked by other jobs or paused: clear the queue and submit again. When the previous handoff has already ended (failed, stopped, paused or succeeded), queueing the same graph again shows "the previous handoff has ended" instead of silently looking accepted. Reloading the page does not resume anything or pick up the latest artifact automatically.
 - Only one explicit handoff chain is supported. Batch submissions, partial execution, cross-phase connections and unknown shared side-effect nodes are refused. Ordinary `/prompt` calls do not split automatically; API clients must use the handoff endpoints.
 
 **Validation boundary:** CPU contracts, isolated host-executor integration and frontend runtime tests exist. Real browser interaction, GPU quality/peak memory, actual global unloading and real save-plugin combinations remain unverified. Streaming segments does not eliminate the final full IMAGE memory requirement; estimates exclude some model/activation costs and cannot guarantee freedom from OOM.
@@ -160,16 +160,16 @@ Only a handoff node in an effective output dependency chain enables the confirma
 
 Each segment runs its first few denoising steps on a reduced canvas, the latent is lifted to the target resolution, and the remaining steps run at full size. **Total denoising steps stay the same** — what shrinks is the cost of those early steps. Leave it disconnected and everything behaves exactly as before.
 
-**Wiring**: add the **SelfLift配置** (Progressive Sampling) node and connect its 配置 (config) output to the `SelfLift配置` input at the bottom of the main node. Disconnected = single-stage sampling, segment cache untouched.
+**Wiring**: add the **SelfLift加速** (Progressive Sampling) node and connect its `SelfLift配置` output to the `SelfLift配置` input at the bottom of the main node. Disconnected = single-stage sampling, segment cache untouched.
 
 - **低清缩放** (downscale ratio, 0.25–0.95, default 0.5): the low-resolution canvas = target canvas × this value, aligned to a multiple of 32. At 0.5 the early steps carry roughly a quarter of the video tokens.
 - **高清步数** (full-res steps, default 6): how many steps run at the target resolution; the low-res steps = the main node's 步数 (steps) minus this value. Both stages need at least one step.
 - **The sampler must be `euler`**: any other choice fails before sampling starts and names the offending parameter instead of quietly falling back to normal sampling.
-- **Lift quality comes from the H3 latent upscaler weights**: download from <https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler> (by LBH-123-AI, Apache-2.0 — take `fp16.safetensors` or `bf16.safetensors` under `minimax_h3_latent_upscaler_3d_conv_v1/`, about 691 MB each) and put the file into `ComfyUI/models/latent_upscale_models/`; the plugin never downloads it. ⚠️ Only `.safetensors` files are listed — a `.pth` in that folder will not appear in the dropdown.
-- **Without a weight file you must tick 允许插值降级** (allow interpolation fallback) to lift by bilinear interpolation instead. In the reference author's own same-seed comparison this route shows **visible artifacts**, not merely a softer picture — use it to check framing and motion, not as a finished shot.
+- **Lift quality comes from the 放大模型 (Upscale model) picker**: download from <https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler> (by LBH-123-AI, Apache-2.0 — take `fp16.safetensors` or `bf16.safetensors` under `minimax_h3_latent_upscaler_3d_conv_v1/`, about 691 MB each) and put the file into `ComfyUI/models/latent_upscale_models/`; the plugin never downloads it. ⚠️ The dropdown only lists the H3 24-channel 3D `.safetensors` files the loader actually accepts — other upscalers (and any `.pth`) in that folder stay hidden.
+- **Without a model you must tick 允许插值降级** (allow interpolation fallback) to lift by bilinear interpolation instead. In the reference author's own same-seed comparison this route shows **visible artifacts**, not merely a softer picture — use it to check framing and motion, not as a finished shot.
 - **Duration, frame count and audio are unaffected**: frames come from the timeline span and the 24 fps base, never from resolution; the lift only changes the spatial size.
-- **Cache behaviour**: installing this version does not invalidate your existing segment caches. But once connected, changing any of 低清缩放 / 高清步数 / 放大权重 re-runs every segment — those values are part of each segment's cache fingerprint.
-- **Invalid parameters fail up front**: steps below 2, 高清步数 out of range, the ratio outside its interval, a ratio that rounds down to no actual reduction, or neither a weight nor the fallback ticked — each error names the parameter, nothing silently reverts.
+- **Cache behaviour**: installing this version does not invalidate your existing segment caches. But once connected, changing any of 低清缩放 / 高清步数 / 放大模型 re-runs every segment — those values are part of each segment's cache fingerprint.
+- **Invalid parameters fail up front**: steps below 2, 高清步数 out of range, the ratio outside its interval, a ratio that rounds down to no actual reduction, or neither a model nor the fallback ticked — each error names the parameter, nothing silently reverts.
 
 **Is it worth it**: set the `H3_计时=1` environment variable and run the same material with the same seed twice — once disconnected (full-res `euler`), once connected — then compare the 合计 (total) in the `段N 采样计时` log lines; a connected run also prints a `段N 渐进采样细分` line splitting low-res sampling, the lift and full-res sampling. ⚠️ Speed-up factor, lifted-image quality and peak VRAM still have no GPU measurements.
 
@@ -411,22 +411,43 @@ Set the environment variable `H3_计时=1` and the log breaks each segment down 
 
 ## Changelog
 
+**2026-09-27**
+
+- Queuing the same graph after a handoff has already ended now tells you to submit again instead of looking accepted.
+- The handoff node now says plainly that a late start usually means the queue is busy or paused — clear it and queue again.
+- Fixed "Queue does nothing after adding the handoff node": extra options on video-saving nodes and pure display nodes at the end of the chain are no longer treated as unsupported.
+- A rejected handoff now names the node and the rule it broke instead of one vague sentence.
+- Queueing no longer asks you to confirm the handoff: you wired the node in yourself, so an accepted graph starts straight away. (⚠️ Entries below from 2026-09-26／25 that mention this confirmation dialog are voided by this change.)
+- Fixed "the node has an input the host doesn't know" after adding the handoff node: the on-node Edit button and the embedded timeline are no longer submitted as parameters, and existing workflows still open.
+- The 比例模式 dropdown on the prompt page is no longer mistaken by the self-tests for a fourth frame selector; the look is unchanged and two long-standing failures pass again (482 front-end checks, all green).
+- A Show Text node at the end of the handoff chain no longer blocks Queue, while a missing input on a node inside the chain is still named. (front-end 482→484, back-end 2512→2514, all green)
+- 精修与放大 is now shown as 放大和重绘 (Upscale and Redraw) with every 精修 label renamed 重绘, old saves still recognised, a new 重绘开关 that defaults to off, sliders for strength and steps, the controls regrouped, and the pixel model picked right on the node. (⚠️ Control order changed — re-check the parameters in old workflows; back-end 2514→2536, front-end 484→495, all green)
+- Four follow-ups from re-reviewing that node: pasted nodes show the right controls, an unreadable model folder only leaves 未选择 instead of breaking the whole node, the error names the dropdown you can see, and the scale floor was raised to 1.1 at the time (⚠️ that floor moved twice more the same day — trust the newest entry; back-end 2536→2540, front-end 495→497, all green)
+- Four more changes to the same node: the scale became a slider too, one drag of the strength slider is now a visible step, steps narrowed to 2–50, and the node keeps its width when you switch modes or reload (new nodes open twice as wide). (⚠️ Old workflows saved with 1 step are rejected — set it to 2 or more; back-end unchanged at 2540, front-end 497→499, all green)
+- The scale slider's step went back to 0.25, because one notch of the 0.1 step was stored a hair too low and ended up upscaling one grid less. (back-end 2540 and front-end 499 unchanged, all green) ⚠️ The floor moved again the same day — see the next entry.
+- The scale floor was briefly raised to 1.25, since 1.0 means no upscaling and has no business on an upscaling node. (⚠️ Superseded by the next entry; back-end 2540 and front-end 499 unchanged, all green)
+- The scale floor went back to 1.0 as you ruled: all the way left means no upscaling, that notch needs no upscale weight, and old saves at 1.0 / 1.1 / 1.25 queue again. (back-end 2540 and front-end 499 unchanged, all green)
+- The lowest redraw strength is now 0.1 instead of 0, so "no redraw at all" has a single switch. (⚠️ An old save below 0.1 is rejected even with the switch off — move it into 0.1–1 and the no-redraw result is unchanged; back-end 2540 and front-end 499 unchanged, all green)
+- On the prompt page the image-to-video aspect-mode dropdown now sits next to the first-frame control; nothing else moved. (front-end unchanged at 499, all green)
+- A rejected handoff now leaves the real reason in the running log and in the job status instead of one unrecognisable error; the common mistake is the audio line — when 放大和重绘 feeds the generator directly, take audio from its own output. (⚠️ The on-screen message itself did not change, so the log is still where you read it; back-end 2540→2545 all green, front-end unchanged at 499)
+
 **2026-09-26**
 
 - Cancelling the handoff confirmation no longer raises an error, and nothing gets queued.
 - The "Overall progress" readout is display-only now and is no longer saved into workflow files.
-- A cleanup failure now pauses the job with a retryable state instead of silently stalling.
+- A cleanup failure now stops the job in a clear terminal state instead of silently stalling; just submit again.
 - Half-step scales such as 1.25x no longer leave a dimension unchanged; results always round up to the 32-pixel grid.
 - A leftover temporary cache file can no longer mask the real error, so failures report their original cause.
 - Batch queueing, per-phase timeouts and path checks were tightened; false permission-boundary rejections and reused queue numbers are fixed.
-- Editing the canvas right after confirming a handoff no longer loses the task — it can still be polled and cancelled.
+- Editing the canvas immediately after confirming a handoff no longer loses the task — it keeps running.
 - A broken cache file is now named in the error message, together with a note that the "Clear segment cache" button does not cover that folder.
 - If a handoff write fails halfway, the partial output directory is only reported; nothing is deleted automatically.
 - A 500 from the handoff API now leaves the full traceback in the server log for diagnosis.
 - Reloading this plugin without restarting ComfyUI no longer registers the same nodes twice.
-- Added the optional **SelfLift配置** (Progressive Sampling) node: when connected, each segment denoises a few steps on a low-resolution canvas, lifts to the target size, then runs the remaining steps — total steps stay the same. Without the connection nothing changes.
+- Added the optional **SelfLift加速** (Progressive Sampling) node: when connected, each segment denoises a few steps on a low-resolution canvas, lifts to the target size, then runs the remaining steps — total steps stay the same. Without the connection nothing changes.
 - Enabling it requires the planner's `采样器` (Sampler) to be `euler`; invalid settings fail before sampling and name the offending parameter instead of quietly falling back.
-- Lifting quality depends on H3 latent upscale weights — the download link and target folder are now in both the Independent refinement and Progressive resolution sampling sections above; with no weight file you must tick 允许插值降级, and that route gives visible artifacts rather than just softer detail.
+- Lifting quality depends on the **放大模型** (Upscale model) picker — the download link and target folder are now in both the Independent refinement and Progressive resolution sampling sections above (⚠️ since 2026-09-27 the former is titled "Independent upscaling and redrawing"); with no model selected you must tick 允许插值降级, and that route gives visible artifacts rather than just softer detail.
+- The 放大模型 dropdown now lists only the H3 latent upscalers this plugin can actually load; other safetensors in the same folder are hidden instead of failing at sampling time.
 - Existing segment caches are not invalidated by this change; the actual time saved has not been measured on GPU yet.
 - "⬆ Fill Nodes" on the status-bar AI planning page now fills by enabled segments: unless all segments are enabled, only the enabled ones are written into the node timeline with their times closed up seamlessly, while disabled segments stay untouched in the draft; with everything enabled the result is identical to before, and with everything disabled it prompts and writes nothing.
 - This change adds 3 targeted tests; the frontend async-writeback isolation suite passes 292/292 (up from 289).
@@ -435,12 +456,21 @@ Set the environment variable `H3_计时=1` and the log breaks each segment down 
 - With **裁剪 (Crop)**, the first frame is center-cropped to the largest region matching the set resolution's aspect before use as input.
 - This applies only to pure i2v; first/last-frame (fl2v) keeps the original full-frame stretch so mismatched frame aspects never cause misalignment.
 - ⚠️ Cache format bumped — all previously generated segments are invalidated; the first run must regenerate everything, so allow extra time.
+- The tooltips of **初采交接与清理** (First-pass Handoff and Cleanup) and **精修与放大** (Refine and Upscale) were rewritten into four line-broken sections: what the node does, how to wire and run it, every parameter with its default and when it is needed, then the caveats. Node behaviour, parameters and sockets are unchanged.
+- Running **初采交接与清理** (First-pass Handoff and Cleanup) through an ordinary queue now fails with a plain message pointing at the handoff confirmation shown when queueing, instead of naming an entry point that does not exist in the UI.
+- The **H3放大权重** dropdown on 精修与放大 (Refine and Upscale) now uses that same filtered list, so only upscalers this plugin can load appear there — no more picking an entry that fails once sampling starts.
+- If a model saved in an older workflow has since been deleted or moved, the message now names the loadable list and says what to change, instead of a bare English value-not-in-list error.
+- Removed the three widgets on **初采交接与清理** (First-pass Handoff and Cleanup) — status, Cancel Handoff and Retry Second Pass Only — so the node is back to connections only.
+- They were over-designed: to run just one segment, set the run range on 长视频规划师 (Video Planner) instead; to stop, press the host panel's Stop. Segments already written to disk survive, so re-submitting picks up where you were.
+- The automatic A save → C global cleanup → B second-pass chain and the confirmation dialog before queueing are unchanged; nothing extra to click.
+- The backend cancel and retry endpoints were removed along with them; the status endpoint stays as an internal diagnostic only, and no status is shown in the UI.
 
 **2026-09-25**
 
 - Added Refine and Upscale to refine first-pass segments before upscaling, keeping existing first-pass connections and audio unchanged.
 - Optionally insert First-pass Handoff and Cleanup to save artifacts, clean across tasks and run the second pass after confirmation; without it, the direct in-memory path stays unchanged.
 - The handoff node shows status and offers cancel or second-pass-only retry; reloading does not restore control automatically, and retries may save duplicates.
+- ⚠️ Corrected 2026-09-26: those three widgets and the cancel/retry endpoints were removed; stopping is done with the host's Stop button.
 - Automated and isolated host tests exist; real browser interaction, GPU output and global-cleanup behavior still need validation.
 
 **2026-09-24**

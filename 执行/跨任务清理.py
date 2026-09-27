@@ -9,6 +9,7 @@ import copy
 import hashlib
 import hmac
 import json
+import logging
 import math
 import secrets
 import sys
@@ -22,7 +23,7 @@ _终态 = frozenset({"FAILED", "CANCELLED", "PAUSED", "SUCCEEDED"})
 # （镜像锁 test_交接状态码白名单与协调器状态全集同步）。二采阶段不新增状态：
 # B 图作为普通宿主提示词执行，精修/放大/输出的进度走 长视频规划师_后处理进度 独立通道。
 _状态全集 = _终态 | frozenset({
-    "VALIDATING", "VALIDATING_RETRY",
+    "VALIDATING",
     "A_QUEUED", "A_RUNNING", "A_WRITING", "ARTIFACT_READY", "A_SUCCEEDED",
     "C_QUEUED", "C_CHECKING", "C_REQUESTED",
     "B_QUEUED", "B_CHECKING", "B_GATE_PASSED",
@@ -45,6 +46,15 @@ class 交接错误(ValueError):
 
 def _拒绝(code, message, status_code=409):
     raise 交接错误(code, message, status_code) from None
+
+
+_最大原因字符 = 300
+
+
+def _单行原因(value):
+    # 分图合同的中文原因要进状态与响应：压成单行并限长，免得大段图内容顺着错误跑出去。
+    text = " ".join(str(value).split()) or "未给出原因"
+    return text[:_最大原因字符] + "…" if len(text) > _最大原因字符 else text
 
 
 def _是取消异常(exc):
@@ -334,7 +344,6 @@ class 交接协调器:
                               "artifact_id": (job.get("ref") or {}).get("artifact_id"),
                               "cleanup_requested": job.get("cleanup_requested", False),
                               "cleanup_confirmed": job.get("cleanup_confirmed", False),
-                              "can_retry": job.get("a_succeeded", False) and job["state"] in _终态,
                               "error": job.get("error"), "report": job.get("report", {})})
 
     def _带能力(self, response):
@@ -354,7 +363,7 @@ class 交接协调器:
                 "nonce": nonce, "attempt": attempt, "digest": _图摘要(graph), "receipt": None,
                 "number": None, "phase": phase}
 
-    async def _准备(self, graph, workflow, options, job_id, attempt, *, original=None):
+    async def _准备(self, graph, workflow, options, job_id, attempt):
         bundle = _JSON副本({"graph": graph, "workflow": workflow})
         graph, workflow = bundle["graph"], bundle["workflow"]
         if type(graph) is not dict or not graph or type(workflow) is not dict or _保留ID.intersection(graph):
@@ -381,8 +390,6 @@ class 交接协调器:
         analysis = _分析图(graph, classes)
         if analysis is None:
             _拒绝("NO_HANDOFF", "图中没有受支持的有效交接链", 400)
-        if original is not None and any(analysis[key] != original[key] for key in ("source_digest", "source_id", "handoff_id", "refiner_id")):
-            _拒绝("SOURCE_CHANGED", "重试必须绑定同一初采来源和节点，请重新正常提交", 400)
         a_nonce, c_nonce, b_nonce = (secrets.token_hex(32) for _ in range(3))
         stages = _构建图(analysis, job_id=job_id, attempt=attempt, a_nonce=a_nonce, b_nonce=b_nonce)
         stages = _JSON副本(stages)
@@ -392,10 +399,9 @@ class 交接协调器:
         phases = {"A": self._记录("A", stages["a_graph"], stages["a_outputs"], analysis["handoff_id"], a_nonce, attempt),
                   "C": self._记录("C", cg, ["_lvp_cleanup"], "_lvp_cleanup", c_nonce, attempt),
                   "B": self._记录("B", bg, ["_lvp_gate"], "_lvp_gate", b_nonce, attempt)}
-        checks = [(phases["B"]["id"], stages["b_graph"], stages["b_outputs"]),
+        checks = [(phases["A"]["id"], phases["A"]["graph"], phases["A"]["outputs"]),
+                  (phases["B"]["id"], stages["b_graph"], stages["b_outputs"]),
                   (phases["C"]["id"], cg, ["_lvp_cleanup"]), (phases["B"]["id"], bg, ["_lvp_gate"])]
-        if original is None:
-            checks.insert(0, (phases["A"]["id"], phases["A"]["graph"], phases["A"]["outputs"]))
         for pid, template, expected in checks:
             # 当前宿主会原位归一化 INT/FLOAT/STRING 输入。冻结真正校验过的图，
             # 而非丢弃归一化后再把未经校验的原值交给 execute。
@@ -409,8 +415,6 @@ class 交接协调器:
             template.update(_JSON副本(checked))
         for record in phases.values():
             record["digest"] = _图摘要(record["graph"])
-        if original is not None:
-            phases["A"] = original["phases"]["A"]
         return {"phases": phases, "workflow": workflow, "options": options,
                 "b_graph": stages["b_graph"], "b_digest": _图摘要(stages["b_graph"]),
                 "b_outputs": stages["b_outputs"], "dynamic_ids": {},
@@ -482,70 +486,25 @@ class 交接协调器:
                 self._启动观察()
                 response = self._公开(job)
         except BaseException as exc:
-            self._失败CAS(job_id, 1, version, "CANCELLED" if _是取消异常(exc) else "FAILED", "SUBMIT_FAILED")
-            if isinstance(exc, 交接错误) or _需原样传播(exc):
+            # 状态里的 error 要与路由透出的 code 同源，否则查状态只剩笼统的 SUBMIT_FAILED。
+            propagate = _需原样传播(exc) or isinstance(exc, 交接错误)
+            code = (exc.code if isinstance(exc, 交接错误) else
+                    "SUBMIT_FAILED" if propagate else
+                    "GRAPH_REJECTED" if isinstance(exc, ValueError) else "SUBMIT_FAILED")
+            self._失败CAS(job_id, 1, version, "CANCELLED" if _是取消异常(exc) else "FAILED", code)
+            if propagate:
                 raise
-            _拒绝("SUBMIT_FAILED", "交接提交校验失败", 400)
+            logging.exception("[长视频规划师] 交接提交校验失败（job %s）", job_id)
+            if code == "GRAPH_REJECTED":
+                # 分图合同的中文原因只含节点 ID 与输入名；映射成带码错误后路由才透得出原因。
+                _拒绝(code, "交接图校验失败：" + _单行原因(exc), 400)
+            _拒绝(code, "交接提交校验失败", 400)
         return self._带能力(response)
 
     def 取交接状态(self, job_id, *, owner, capability):
         cap_hash = self._能力摘要(capability)
         with self._临界区():
             return self._公开(self._授权(job_id, owner, cap_hash))
-
-    def 取消交接任务(self, job_id, attempt, version, *, owner, capability):
-        cap_hash = self._能力摘要(capability)
-        with self._临界区():
-            job = self._授权(job_id, owner, cap_hash)
-            self._版本(job, attempt, version)
-            if job["state"] in _终态:
-                _拒绝("TERMINAL", "任务已结束；不能以迟到取消覆盖结果")
-            ids = {record["id"] for record in job.get("phases", {}).values()}
-            self._迁移(job, "CANCELLED", error="CANCELLED")
-            # 定向删除；不 clear queue，不读取/消费/撤销 flags。
-            for pid in ids:
-                while self.q.delete_queue_item(lambda item, pid=pid: item[1] == pid):
-                    pass
-                self.q.interrupt_if_running(pid)
-            return self._公开(job)
-
-    async def 重试交接任务(self, job_id, attempt, version, graph, workflow, *, owner, capability, options=None):
-        cap_hash = self._能力摘要(capability)
-        options = _选项(options)
-        with self._临界区():
-            job = self._授权(job_id, owner, cap_hash)
-            self._版本(job, attempt, version)
-            if self._closed or job["state"] not in _终态 or not job["a_succeeded"] or not job["ref"]:
-                _拒绝("RETRY_NOT_ALLOWED", "仅完整成功的 A 产物可显式重跑二采")
-            if self._active is not None:
-                _拒绝("CHAIN_BUSY", "已有活动交接链")
-            self._空闲()
-            original = copy.deepcopy(job)
-            self._active = job_id
-            self._迁移(job, "VALIDATING_RETRY", attempt=attempt + 1, cleanup_requested=False,
-                     cleanup_confirmed=False, error=None, report={})
-            retry_version = job["version"]
-            a_history = self._历史(job["phases"]["A"])
-        try:
-            if not await asyncio.to_thread(self._历史成功, a_history, original["phases"]["A"]):
-                _拒绝("A_HISTORY_INVALID", "初采完整成功历史已缺失或不匹配")
-            await asyncio.to_thread(self._清单, original)
-            with self._临界区():
-                self._版本(job, attempt + 1, retry_version)
-            prepared = await self._准备(graph, workflow, options, job_id, attempt + 1, original=original)
-            with self._临界区():
-                self._版本(job, attempt + 1, retry_version)
-                self._空闲()
-                job.update(prepared)
-                self._入队(job, "C")
-                self._启动观察()
-                return self._公开(job)
-        except BaseException as exc:
-            self._失败CAS(job_id, attempt + 1, retry_version,
-                        "CANCELLED" if _是取消异常(exc) else "FAILED", "RETRY_FAILED")
-            if isinstance(exc, 交接错误) or _需原样传播(exc):
-                raise
-            _拒绝("RETRY_FAILED", "二采重试校验失败", 400)
 
     def _失败CAS(self, job_id, attempt, version, state, code):
         with self._临界区():
@@ -822,7 +781,7 @@ class 交接协调器:
             if self._active is None:
                 return
             job = self._jobs[self._active]
-            if job["state"] in ("VALIDATING", "VALIDATING_RETRY"):
+            if job["state"] == "VALIDATING":
                 return
             phase = job["phase"]
             record = job["phases"][phase]

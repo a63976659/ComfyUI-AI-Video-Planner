@@ -41,7 +41,7 @@ def 放大图像批(images, 方式, 目标宽, 目标高, 模型=None):
     count = images.shape[0]
     if 方式 == "像素模型":
         if getattr(模型, "patcher", None) is None:
-            raise ValueError("请连接官方放大模型加载器的 UPSCALE_MODEL 输出")
+            raise ValueError("像素放大模型无效：请在「像素放大模型」下拉里选一个 models/upscale_models/ 下的模型（与官方 Load Upscale Model 同一目录）")
         images = 调用节点("ImageUpscaleWithModel", upscale_model=模型, image=images)[0]
         _校验图像(images, (count, *getattr(images, "shape", ())[1:]), "放大结果")
     if (images.shape[2], images.shape[1]) != (目标宽, 目标高):

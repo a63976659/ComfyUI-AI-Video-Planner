@@ -133,7 +133,7 @@ class 长视频规划师(io.ComfyNode):
                 #   故不受「新 widget 必须追加末尾」的位置回填约束；放末尾同时让前 20 个输入的顺序与
                 #   名称一字不动。不连接＝None＝单阶段采样（原路径逐字不变）。
                 io.Custom("LVP_SELFLIFT_CONFIG").Input("SelfLift配置", optional=True,
-                                                       tooltip="连 SelfLift配置 节点：每段前若干步在低清画布采样、抬升后跑完剩余步。"
+                                                       tooltip="连 SelfLift加速 节点：每段前若干步在低清画布采样、抬升后跑完剩余步。"
                                                                "不连接保持单阶段；启用时「采样器」须为 euler"),
             ],
             outputs=[

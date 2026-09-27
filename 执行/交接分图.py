@@ -176,19 +176,20 @@ def _输出闭包(graph, outputs):
     return found
 
 
-def _节点合同(node_id, node, cls):
+def _节点合同(node_id, node, cls, 链上):
     if cls is None:
         raise ValueError(f"{node_id}: 宿主 node_classes 中不存在 {node['class_type']}")
     for flag in ("INPUT_IS_LIST", "NODE_IS_LIST"):
         value = getattr(cls, flag, False)
-        if value is not False:
+        # 链外的纯显示 sink 允许明确的 True；不明确取值仍然一律拒。
+        if value is not False and (链上 or value is not True):
             raise ValueError(f"{node_id}: 不支持 {flag} 列表节点或不明确的列表合同")
     returns = getattr(cls, "RETURN_TYPES", None)
     if not isinstance(returns, (tuple, list)) or not all(isinstance(x, str) for x in returns):
         raise ValueError(f"{node_id}: 不支持动态 RETURN_TYPES 合同")
     output_lists = getattr(cls, "OUTPUT_IS_LIST", (False,) * len(returns))
     if (not isinstance(output_lists, (tuple, list)) or len(output_lists) != len(returns)
-            or any(type(x) is not bool for x in output_lists) or any(output_lists)):
+            or any(type(x) is not bool for x in output_lists) or (链上 and any(output_lists))):
         raise ValueError(f"{node_id}: 不支持 OUTPUT_IS_LIST 列表或错误的列表合同")
     if getattr(cls, "ACCEPT_ALL_INPUTS", False):
         raise ValueError(f"{node_id}: 不支持 ACCEPT_ALL_INPUTS 动态输入")
@@ -220,7 +221,11 @@ def _节点合同(node_id, node, cls):
                 raise ValueError(f"{node_id}.{key}: 不支持 rawLink/lazy 依赖")
             specs[key] = spec
     for key in node["inputs"]:
-        if key not in specs:
+        # 宿主前端会把派生控件写成「父名.子名」（如 SaveVideo 的 format.codec），按父声明校验。
+        点号 = key.find(".")
+        声明 = key if 点号 < 0 or key in specs else key[:点号]
+        # 链外的未声明键（如第三方显示扩展的界面副本）原样透传给宿主；初采链上仍逐键核对。
+        if 声明 not in specs and 链上:
             raise ValueError(f"{node_id}.{key}: INPUT_TYPES 未声明的输入，不猜测复杂子图")
     return returns
 
@@ -269,10 +274,12 @@ def 分析交接图(graph, node_classes):
     effective = {key: graph[key] for key in active if key in graph}
     links, deps = _图结构(effective)
     order = _拓扑(deps)
+    # 列表合同只否决决定初采产物的上游链；链外的显示型 sink 由宿主按常规阶段执行。
+    链上 = _闭包(sorted(key for key in handoffs if key in deps), deps)
     classes, returns = {}, {}
     for key in order:
         cls = node_classes.get(effective[key]["class_type"])
-        returns[key] = _节点合同(key, effective[key], cls)
+        returns[key] = _节点合同(key, effective[key], cls, key in 链上)
         classes[key] = cls
     for key in order:
         for name, (parent, slot) in links[key].items():

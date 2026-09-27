@@ -49,7 +49,7 @@ function 注入样式() {
       .lvp-首尾帧{display:flex;flex-direction:row;gap:8px;flex:0 0 auto;align-items:flex-start}
       .lvp-帧框{display:flex;flex-direction:column;gap:3px;flex:0 0 auto}
       .lvp-帧标{color:var(--fg-color,#ccc)}
-      .lvp-帧选{width:120px;background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:3px;padding:2px 4px;font:11px system-ui}
+      .lvp-帧选,.lvp-比例选{width:120px;background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:3px;padding:2px 4px;font:11px system-ui}
       .lvp-帧预览{width:120px;height:120px;box-sizing:border-box;object-fit:cover;display:block;border:1px solid var(--border-color,#3a3a3a);border-radius:6px;background:var(--comfy-input-bg,#1a1a1a)}
       .lvp-帧预览[hidden]{display:none}
       .lvp-中间帧位置{display:block;box-sizing:border-box;width:120px;margin-top:3px;background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:3px;padding:2px 4px;font:11px system-ui}
@@ -220,21 +220,21 @@ export function 创建编辑页面板(编辑页, 上下文) {
         段.refs = { ...段.refs, 中间帧位置: 百分比 / 100 };
         真源.写时间轴(节点, { segments: 段组 });
     };
-    首尾帧区.append(首帧框.盒, 尾帧框.盒, 中间帧框.盒);
-    // i2v 比例模式选择（仅 i2v 可见）：原图比例 / 裁剪到设定比例
+    // i2v 比例模式选择（仅 i2v 可见）：原图比例 / 裁剪到设定比例。排在首帧之后、尾帧之前，
+    // 紧邻首帧；隐藏态用 visibility 占位，切换任务类型时不引起横向跳动。
     const 比例模式盒 = document.createElement("div");
     比例模式盒.className = "lvp-帧框";
     const 比例模式标 = document.createElement("span");
     比例模式标.className = "lvp-帧标";
     比例模式标.textContent = "比例模式";
     const 比例模式sel = document.createElement("select");
-    比例模式sel.className = "lvp-帧选";
+    比例模式sel.className = "lvp-比例选";
     [["裁剪", "按设置尺寸比例裁剪生成"], ["原图", "按图像原尺寸比例生成"]].forEach(([v, t]) => {
         const o = document.createElement("option"); o.value = v; o.textContent = t;
         比例模式sel.appendChild(o);
     });
     比例模式盒.append(比例模式标, 比例模式sel);
-    首尾帧区.appendChild(比例模式盒);
+    首尾帧区.append(首帧框.盒, 比例模式盒, 尾帧框.盒, 中间帧框.盒);
     比例模式sel.onchange = () => {
         const 节点 = 取节点();
         if (!节点) return;

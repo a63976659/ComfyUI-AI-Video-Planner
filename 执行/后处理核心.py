@@ -190,16 +190,23 @@ def _目标预检(package, models, params, upscale):
     info = None
     if enlarged:
         if mode == "H3潜空间":
-            info = 预检H3放大权重(upscale.get("H3放大权重"))
+            权重 = upscale.get("H3放大权重")
+            if 权重 == "未选择" or not isinstance(权重, str) or not 权重:
+                # 默认档就是 H3潜空间，目录里没有兼容权重时下拉只剩「未选择」；报错指到组件上，
+                # 也给出免模型的退路。不放宽：这种值 预检H3放大权重 本来也会拒，只是文案说的是路径规则。
+                raise ValueError("放大方式为「H3潜空间」时，请在「H3放大权重」下拉选一个 models/latent_upscale_models/ "
+                                 "下符合 H3 24 通道 3D 架构的 .safetensors；目录里没有就改用「Lanczos」（免模型）")
+            info = 预检H3放大权重(权重)
         else:
             required.add("ImageScale")
             if mode == "像素模型":
                 pixel_model = upscale.get("像素放大模型")
                 if getattr(pixel_model, "patcher", None) is None:
-                    raise ValueError("像素放大需要官方放大模型加载器的 UPSCALE_MODEL 输出")
+                    raise ValueError("放大方式为「像素模型」时，请在「像素放大模型」下拉选一个 models/upscale_models/ "
+                                     "下的模型文件")
                 scale = getattr(pixel_model, "scale", None)
                 if type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0:
-                    raise ValueError("像素放大需要官方放大模型加载器提供有限正数 scale，已在精修前中止")
+                    raise ValueError("「像素放大模型」下拉选的文件没给出有限正数放大倍率，已在精修前中止；请换 models/upscale_models/ 下的单图放大模型")
                 required.add("ImageUpscaleWithModel")
     return width, height, enlarged, info, required
 
