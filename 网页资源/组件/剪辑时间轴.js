@@ -76,6 +76,13 @@ function 注入样式() {
       .lvp-ct-钮.主{border-color:color-mix(in srgb,var(--ct-acc) 42%,transparent);color:var(--ct-acc);
         background:linear-gradient(180deg,color-mix(in srgb,var(--ct-acc) 18%,var(--comfy-menu-bg)),color-mix(in srgb,var(--ct-acc) 10%,var(--comfy-menu-secondary-bg)))}
       .lvp-ct-钮.危:hover:not(:disabled){border-color:var(--ct-danger);color:var(--ct-danger)}
+      /* 禁用字幕开关：label 包住 checkbox＋文字，外观跟 .lvp-ct-钮 同一套配方（等高、不换行、主题变量取色）。 */
+      .lvp-ct-开关{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;padding:2px 7px;border-radius:6px;
+        border:1px solid var(--ct-line2);background:linear-gradient(180deg,var(--comfy-menu-bg,#2c2f35),var(--comfy-menu-secondary-bg,#23262b));
+        color:var(--ct-mut);font:inherit;line-height:1.35;cursor:pointer;white-space:nowrap}
+      .lvp-ct-开关:hover:not(.关禁){border-color:var(--border-color,#5d646f)}
+      .lvp-ct-开关.关禁{opacity:.38;cursor:not-allowed}
+      .lvp-ct-开关框{appearance:auto;width:11px;height:11px;margin:0;flex:0 0 auto;cursor:inherit}
       .lvp-ct-选{padding:2px 5px;background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);
         border:1px solid var(--ct-line);border-radius:6px;font:11px system-ui;min-width:0;max-width:120px}
       .lvp-ct-标{color:var(--ct-mut);font-size:10px;white-space:nowrap}
@@ -181,7 +188,7 @@ export function 创建剪辑时间轴(容器, ctx) {
     let b台词 = null;
 
     function 读草稿() { const n = 取节点(); return n ? 真源.读剪辑草稿(n) : { brief: {}, segments: [] }; }
-    function 写草稿(段组) {
+    function 写草稿(段组, 顶层补丁) {
         const n = 取节点(); if (!n) return;
         const 草 = 读草稿();
         // NaN 守卫（P-3 同源）：进 JSON.stringify 前挡非法数值，防转 null 损坏后端 float 契约
@@ -190,7 +197,7 @@ export function 创建剪辑时间轴(容器, ctx) {
             if (!Number.isFinite(s.end)) s.end = s.start;
             if (!(s.end > s.start)) s.end = s.start + 最小时长;   // I5：挡负/零时长，防后端静默补 5s
         }
-        真源.写剪辑草稿(n, { ...草, brief: 草.brief || {}, segments: 段组 });
+        真源.写剪辑草稿(n, { ...草, ...顶层补丁, brief: 草.brief || {}, segments: 段组 });
     }
     function 段组() { return 读草稿().segments || []; }
     function 总时长Of(g) { return g && g.length ? (g[g.length - 1].end || 0) : 0; }
@@ -692,9 +699,18 @@ export function 创建剪辑时间轴(容器, ctx) {
         if (g.some((s) => s && (typeof s.segment_id !== "string" || !s.segment_id))) { 分配段ID(g); 写草稿(g); }
         const 全启用 = 启用idx.length === g.length;
         const 目标ids = 全启用 ? [] : 启用idx.map((i) => String(g[i].segment_id));
+        // 禁用字幕开关（草稿顶层键）：上传段换成浅拷贝并剥掉 字幕/台词时长提示，同时把标记带给后端
+        //   （后端据此整段不拼「字幕 …」节、system 追加屏上文字禁令）。只影响本次请求的副本；
+        //   草稿里的字幕一个字节不动，台词估时/段卡/右列照旧（规格 §4/§6.5）。
+        const 禁用字幕 = 草.禁用字幕 === true;
+        const 上传段 = (段) => {
+            if (!禁用字幕) return 段;
+            const { 字幕: _删, 台词时长提示: _删2, ...其余 } = 段 || {};
+            return 其余;
+        };
         const body = {
-            brief: 草.brief || {}, segments: 全启用 ? 启用idx.map((i) => g[i]) : g,
-            风格技能: 技能sel?.value || "不指定", 辅助风格: 辅助sel?.value || "无",
+            brief: 草.brief || {}, segments: 全启用 ? 启用idx.map((i) => 上传段(g[i])) : g.map(上传段),
+            风格技能: 技能sel?.value || "不指定", 辅助风格: 辅助sel?.value || "无", 禁用字幕,
         };
         if (!全启用) body.目标段ids = 目标ids;
         if (模型sel?.value) body.模型id = 模型sel.value;
@@ -876,12 +892,29 @@ export function 创建剪辑时间轴(容器, ctx) {
         const b启用 = 建钮("启用", "", "切换选中段（或多选）是否参与 AI 生成提示词", 切启用);
         const b全启 = 建钮("全部启用", "", "所有段都参与 AI 生成提示词", () => 设全启用(true));
         const b全不启 = 建钮("全不启用", "", "所有段都不参与 AI 生成提示词（保持原 prompt）", () => 设全启用(false));
+        // 禁用字幕开关（2026-09-28，规格 §6）：真源＝剪辑草稿顶层 禁用字幕，故每次 渲染() 现读、不自设闭包缓存
+        //   （与节点时间轴「渐变过渡」开关同范式）——拆分/删除/启用切换/台词估时等任何写草稿路径都不会与 UI 失同步。
+        //   只作用于「✨ AI 生成提示词」：字幕照旧参与台词估时、照旧显示在段卡与右列。
+        const 字幕开关 = document.createElement("label"); 字幕开关.className = "lvp-ct-开关";
+        const 字幕框 = document.createElement("input");
+        字幕框.type = "checkbox"; 字幕框.className = "lvp-ct-开关框";
+        字幕框.checked = 读草稿().禁用字幕 === true;
+        字幕框.disabled = 忙 || !节点 || !有段;         // 生成期间不得改，避免与在途请求的 body 语义不一致；零段时与「台词估时」同口径禁用（勾了无处生效，且只含开关的空草稿会被计划存档判成「缺草稿」而在加载时丢掉）
+        字幕框.onchange = () => {
+            // 忙期 checkbox 未被程序禁用（禁用只在 渲染() 设，而 生成提示词() 进 忙 时不重渲染；
+            //   CSS `.lvp-ct.忙 .lvp-ct-行{pointer-events:none}` 挡得住鼠标、挡不住 Tab+Space），故在入口拒绝并回退真源。
+            if (忙) { 字幕框.checked = 读草稿().禁用字幕 === true; return; }
+            写草稿(段组(), { 禁用字幕: 字幕框.checked });
+        };
+        字幕开关.title = "禁用字幕：开启后「AI 生成提示词」不上传字幕数据，系统指令改为要求画面不得出现任何屏上文字；字幕仍可用于「台词估时」与段卡显示（存进本节点剪辑草稿顶层「禁用字幕」）";
+        字幕开关.append(字幕框, "禁用字幕");
+        if (字幕框.disabled) 字幕开关.classList.add("关禁");
         b台词 = 建钮("台词估时", "", "选择作为台词的字幕，按语速预览段长与拆分结果，确认后只更新草稿", 台词估时);
         b台词.disabled = 忙 || !节点 || !有段;
         b新建.disabled = 忙 || !节点;   // 节点 已在 渲染() 头部取好（取节点()）；与空草稿常显面板（Item1）配合：有节点即可建首段
         b分割.disabled = b删除.disabled = b启用.disabled = b全启.disabled = b全不启.disabled = 忙 || !有段;
         概要El = document.createElement("span"); 概要El.className = "lvp-ct-概要";
-        工具.append(b新建, b分割, b删除, b启用, b全启, b全不启, b台词);
+        工具.append(b新建, b分割, b删除, b启用, b全启, b全不启, 字幕开关, b台词);
         根.appendChild(工具);
 
         // 生成行（技能/辅助/模型 + AI生成提示词 + 填充节点）：持久元素，只建一次（C1）

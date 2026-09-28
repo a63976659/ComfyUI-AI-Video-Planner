@@ -139,6 +139,7 @@ def 注册路由():
         if not ok:
             return web.json_response({"error": err}, status=400)
         覆盖 = _解析模型覆盖(body)   # pop 模型id → 按所选模型临时切换 opener（不写盘），同 /lvp/plan
+        禁用字幕 = body.get("禁用字幕") is True
         opener = 造opener(覆盖) if 覆盖 else 默认opener
         try:
             loop = asyncio.get_running_loop()
@@ -149,7 +150,7 @@ def 注册路由():
                     body.get("brief") if isinstance(body.get("brief"), dict) else {},
                     body["segments"], opener,
                     str(body.get("风格技能") or "不指定"), str(body.get("辅助风格") or "无"),
-                    回执=回执, 状态=逐段状态))
+                    回执=回执, 状态=逐段状态, 禁用字幕=禁用字幕))
             响应 = {"segments": 结果}
             if 回执.get("知识库") is not None:        # A5：选了知识库时回显实际来源/截断/缺失
                 响应["knowledge"] = 回执["知识库"]
@@ -174,6 +175,7 @@ def 注册路由():
         if not ok:
             return web.json_response({"error": err}, status=400)
         覆盖 = _解析模型覆盖(body)   # 同 /lvp/plan/prompts：按所选模型临时切换 opener（不写盘）
+        禁用字幕 = body.get("禁用字幕") is True
         opener = 造opener(覆盖) if 覆盖 else 默认opener
         try:
             loop = asyncio.get_running_loop()
@@ -184,7 +186,7 @@ def 注册路由():
                     body.get("brief") if isinstance(body.get("brief"), dict) else {},
                     body["segments"], body["目标段ids"], opener,
                     str(body.get("风格技能") or "不指定"), str(body.get("辅助风格") or "无"),
-                    回执=回执, 状态=逐段状态))
+                    回执=回执, 状态=逐段状态, 禁用字幕=禁用字幕))
             响应 = {"segments": 结果}
             if 回执.get("知识库") is not None:
                 响应["knowledge"] = 回执["知识库"]

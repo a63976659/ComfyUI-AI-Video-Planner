@@ -23,9 +23,11 @@ _KB融合说明 = (
 )
 
 
-def 构建提示词生成prompt(brief: dict, segments: list, 技能: str = "不指定", 辅助: str = "无", 回执: dict = None) -> tuple:
+def 构建提示词生成prompt(brief: dict, segments: list, 技能: str = "不指定", 辅助: str = "无", 回执: dict = None,
+                     禁用字幕: bool = False) -> tuple:
     """返回 (system, user)。segments 为用户编辑定稿的草稿段数组（含 start/end/标题/字幕/prompt 画面草稿）。
-    可选 回执 dict（A5）：选了知识库技能时把装配回执写入 回执["知识库"]，供界面回显实际来源/截断/缺失。"""
+    可选 回执 dict（A5）：选了知识库技能时把装配回执写入 回执["知识库"]，供界面回显实际来源/截断/缺失。
+    禁用字幕＝剪辑时间轴开关：段行的「字幕 …」节整段不装配，并在 system 追加不得要求屏上字的反向指令。"""
     brief = brief if isinstance(brief, dict) else {}
     主题 = str(brief.get("主题") or "").strip()
     平台 = str(brief.get("平台") or "通用").strip()
@@ -44,14 +46,18 @@ def 构建提示词生成prompt(brief: dict, segments: list, 技能: str = "不�
         "涉及角色时保持同一角色外貌描述在全片一致。"
         "提示词只写视觉内容，不要添加分辨率、像素尺寸或画幅比例等输出参数。"
     )
+    if 禁用字幕:
+        system += "本次禁用字幕：提示词中不得要求画面出现字幕、标题字、台词文字等任何屏上文字，只写可视画面内容。"
     段行 = []
     for i, raw in enumerate(segments or []):
         raw = raw if isinstance(raw, dict) else {}
         起 = float(raw.get("start") or 0)
         末 = float(raw.get("end") or 0)
+        字幕节 = "" if 禁用字幕 else f"字幕 {raw.get('字幕') or ''} | "
         段行.append(
             f"段{i + 1}: 时长{max(0.0, 末 - 起):.1f}s | 职能 {raw.get('职能') or ''} | 标题 {raw.get('标题') or ''} | "
-            f"字幕 {raw.get('字幕') or ''} | 情绪 {raw.get('情绪') or ''} | 钩子 {raw.get('钩子') or ''} | "
+            + 字幕节 +
+            f"情绪 {raw.get('情绪') or ''} | 钩子 {raw.get('钩子') or ''} | "
             f"画面草稿 {raw.get('prompt') or ''}"
         )
     user = (
@@ -161,13 +167,13 @@ def _从输出取prompts(文本, 目标段=None):
 
 
 def 生成提示词(brief: dict, segments: list, opener, 技能: str = "不指定", 辅助: str = "无",
-             回执: dict = None, 状态: dict = None) -> list:
+             回执: dict = None, 状态: dict = None, 禁用字幕: bool = False) -> list:
     """编排：构建提示词 → opener → 提取JSON → 定位 prompts 数组 → 归并。返回新段数组。
 
     降级契约同 规划器.规划：任一失败抛带上下文 RuntimeError（路由转 400/502/500 + {error}）。
     可选 回执 dict（A5）：与 构建提示词生成prompt 同一机制，回填 回执["知识库"] 供路由回显。
     可选 状态 dict（A1）：回填逐段提示词状态（segment_id → "ok"/"degraded"），供路由按段回显。"""
-    system, user = 构建提示词生成prompt(brief, segments, 技能, 辅助, 回执=回执)
+    system, user = 构建提示词生成prompt(brief, segments, 技能, 辅助, 回执=回执, 禁用字幕=禁用字幕)
     文本 = _调opener取文本(system, user, opener)
     try:
         prompts = _从输出取prompts(文本)
@@ -181,10 +187,11 @@ def 生成提示词(brief: dict, segments: list, opener, 技能: str = "不指�
 
 
 def 构建局部重试prompt(brief: dict, segments: list, 目标索引: list, 技能: str = "不指定",
-                    辅助: str = "无", 回执: dict = None) -> tuple:
+                    辅助: str = "无", 回执: dict = None, 禁用字幕: bool = False) -> tuple:
     """返回 (system, user)（A2 局部重试）。segments 为**完整故事只读上下文**（逐段编号），
     目标索引 标记其中哪几段【需重写】；模型只为目标段按序输出新提示词，不得输出非目标段。
-    每段带自自己的 task，供“按各段任务选择适用 H3 指南”参考。知识库注入机制同 构建提示词生成prompt。"""
+    每段带自自己的 task，供“按各段任务选择适用 H3 指南”参考。知识库注入机制同 构建提示词生成prompt。
+    禁用字幕＝同 构建提示词生成prompt：所有段（含只读上下文段）都不输出「字幕 …」节，system 追加屏上文字禁令。"""
     brief = brief if isinstance(brief, dict) else {}
     主题 = str(brief.get("主题") or "").strip()
     平台 = str(brief.get("平台") or "通用").strip()
@@ -203,15 +210,18 @@ def 构建局部重试prompt(brief: dict, segments: list, 目标索引: list, �
         "重写时须：保持与相邻非目标段的动作、场景转换衔接；涉及角色时保持同一角色外貌描述全片一致；"
         "提示词只写视觉内容，不添加分辨率、像素尺寸或画幅比例等输出参数。"
     )
+    if 禁用字幕:
+        system += "本次禁用字幕：提示词中不得要求画面出现字幕、标题字、台词文字等任何屏上文字，只写可视画面内容。"
     段行 = []
     for i, raw in enumerate(segments or []):
         raw = raw if isinstance(raw, dict) else {}
         起 = float(raw.get("start") or 0)
         末 = float(raw.get("end") or 0)
         标 = "【需重写】" if i in 目标集 else ""
+        字幕节 = "" if 禁用字幕 else f"字幕 {raw.get('字幕') or ''} | "
         段行.append(
             f"段{i + 1}{标}: 任务 {raw.get('task') or 默认任务} | 时长{max(0.0, 末 - 起):.1f}s | "
-            f"职能 {raw.get('职能') or ''} | 标题 {raw.get('标题') or ''} | 字幕 {raw.get('字幕') or ''} | "
+            f"职能 {raw.get('职能') or ''} | 标题 {raw.get('标题') or ''} | " + 字幕节 +
             f"情绪 {raw.get('情绪') or ''} | 钩子 {raw.get('钩子') or ''} | "
             f"画面草稿 {raw.get('prompt') or ''}"
         )
@@ -243,7 +253,7 @@ def 构建局部重试prompt(brief: dict, segments: list, 目标索引: list, �
 
 
 def 局部重试(brief: dict, segments: list, 目标ids, opener, 技能: str = "不指定", 辅助: str = "无",
-          回执: dict = None, 状态: dict = None) -> list:
+          回执: dict = None, 状态: dict = None, 禁用字幕: bool = False) -> list:
     """A2：局部重试。携带**完整故事只读上下文**，服务端**仅允许修改目标段**（按 segment_id 清单）。
     非目标段的 prompt 与其他字段一律不动；返回新全段数组。超量、无 ID 缺项或 ID 校验失败时拒绝写入；等长空/无效占位或有效 ID 对齐后的缺项逐段降级，异常契约同 生成提示词。
     可选 状态 dict（A1）：仅回填**目标段**的逐段状态。目标清单为空/与 segment_id 不匹配 → ValueError。"""
@@ -253,7 +263,7 @@ def 局部重试(brief: dict, segments: list, 目标ids, opener, 技能: str = "
     if not 目标索引:
         raise ValueError("局部重试：目标段清单为空或与 segments 的 segment_id 不匹配")
     目标段 = [全段[i] for i in 目标索引]
-    system, user = 构建局部重试prompt(brief, 全段, 目标索引, 技能, 辅助, 回执=回执)
+    system, user = 构建局部重试prompt(brief, 全段, 目标索引, 技能, 辅助, 回执=回执, 禁用字幕=禁用字幕)
     文本 = _调opener取文本(system, user, opener)
     try:
         prompts = _从输出取prompts(文本, 目标段=目标段)

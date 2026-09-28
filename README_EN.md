@@ -411,6 +411,12 @@ Set the environment variable `H3_计时=1` and the log breaks each segment down 
 
 ## Changelog
 
+**2026-09-28**
+
+- The clip timeline gained a 禁用字幕 (disable subtitles) checkbox, sitting to the left of 台词估时: once it's ticked, "✨ AI generate prompts" no longer uploads your subtitles and the AI no longer puts on-screen text into the shots — the subtitle text itself is still there for estimating line duration.
+- Same-day follow-up: when the checkbox has never been ticked, editing on the planning page and 生成规划 no longer write a stray 禁用字幕: false into the draft. Two more tests now pin that the switch survives 台词估时 re-timing and plan save/load round-trips.
+- Second same-day review: while the timeline has no segments at all, the 禁用字幕 checkbox is greyed out just like 台词估时, so a draft that holds nothing but the switch can no longer be filed as an empty plan and silently dropped on load.
+
 **2026-09-27**
 
 - Queuing the same graph after a handoff has already ended now tells you to submit again instead of looking accepted.
