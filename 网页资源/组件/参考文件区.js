@@ -1,7 +1,9 @@
 import { app } from "../../../scripts/app.js";
+import { 打开媒体预览 } from "./媒体预览.js";
 
-const 上限 = { 图片: 9, 音频: 3, 视频: 3 };
+export const 上限 = { 图片: 9, 音频: 3, 视频: 3 };   // 前端槽位真源，镜像 执行/参考素材.py 上限；框架层 映射段素材 复用同一份
 const 接受 = { 图片: "image/*", 音频: "audio/*", 视频: "video/*" };
+const 预览类型 = { 图片: "图像", 视频: "视频", 音频: "音频" };   // 槽位名→素材类型（预览弹窗按类型选播放器形态）
 // 拖入不受 input accept 约束（drop 任何组都收得到全部文件），按 MIME 前缀分类、
 // type 为空（如 mkv/系统拖入常见）时按扩展名回退；判定不了即拒收。
 const MIME槽 = { image: "图片", audio: "音频", video: "视频" };
@@ -65,7 +67,8 @@ export function 创建参考文件区(容器, { 变更, 共用变更, 捕获快�
                 const 删 = () => { 素材[槽].splice(i, 1); 提交(); };
                 const 瓦 = document.createElement("span");
                 瓦.className = "lvp-缩略";
-                瓦.title = `${i + 1}. ${名}`;
+                瓦.title = `${i + 1}. ${名}｜点击预览`;
+                瓦.onclick = () => 打开媒体预览({ 名, 类型: 预览类型[槽] });
                 if (槽 === "音频") {
                     // 音频无可视封面，统一用音符图标封面（与图/视频缩略图同尺寸）
                     const 音 = document.createElement("span");
@@ -83,7 +86,7 @@ export function 创建参考文件区(容器, { 变更, 共用变更, 捕获快�
                 }
                 const x = document.createElement("b");
                 x.textContent = "×";
-                x.onclick = 删;
+                x.onclick = (e) => { e.stopPropagation(); 删(); };   // × 在可点击瓦片内：拦住冒泡，否则移除同时弹预览
                 瓦.appendChild(x);
                 内容.appendChild(瓦);
             });

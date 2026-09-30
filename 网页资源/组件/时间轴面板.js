@@ -58,8 +58,11 @@ function 注入样式() {
       .lvp-tl-概要{color:var(--tl-mut);white-space:nowrap;font-variant-numeric:tabular-nums}
 
       /* 缩放控件（纯视图）：按钮复用 .lvp-tl-钮 款式＝与新增/删除同尺寸同主题；图标描边取 currentColor。
-         margin-left:auto 挂在缩放组而非概要上：整组连同概要一起右推，缩放条紧贴「共 N 段」左侧。 */
-      .lvp-tl-缩放{display:inline-flex;align-items:center;gap:2px;flex:0 0 auto;margin-left:auto}
+         右推靠撑位（非 margin-left:auto）：有余宽时撑位吃满→缩放组连同概要右靠、缩放条紧贴「共 N 段」左侧；
+         工具条溢出（面板变窄）时撑位收成 0，缩放组与概要顺序紧跟左侧按钮整条横向滚，
+         不再出现 auto 边距在 overflow 容器里把缩放组钉在右缘、概要文字压上来的重叠。 */
+      .lvp-tl-撑{flex:1 1 0;min-width:0}
+      .lvp-tl-缩放{display:inline-flex;align-items:center;gap:2px;flex:0 0 auto}
       .lvp-tl-缩放钮{padding:2px 5px;gap:0}
       .lvp-tl-缩放钮 svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
       .lvp-tl-缩放入{appearance:none;width:64px;height:3px;margin:0 2px;border:0;border-radius:2px;background:var(--tl-line2);cursor:pointer;flex:0 0 auto}
@@ -712,7 +715,8 @@ export function 挂载时间轴(node, 面板) {
         概要 = document.createElement("span");
         概要.className = "lvp-tl-概要";
         缓存面板.同步失效版本();
-        工具.append(新增, 删除, 裁剪, 全选, 全不选, 锚定, 缓存条, 缩放组, 概要);
+        const 撑 = document.createElement("div"); 撑.className = "lvp-tl-撑";
+        工具.append(新增, 删除, 裁剪, 全选, 全不选, 锚定, 缓存条, 撑, 缩放组, 概要);
         根.appendChild(工具);
 
         const 卷 = document.createElement("div");

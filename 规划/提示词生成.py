@@ -33,6 +33,7 @@ def 构建提示词生成prompt(brief: dict, segments: list, 技能: str = "不�
     平台 = str(brief.get("平台") or "通用").strip()
     风格 = str(brief.get("风格") or "").strip()
     受众 = str(brief.get("受众") or "").strip()
+    详细内容 = str(brief.get("详细内容") or "").strip()
     语言 = str(brief.get("语言") or "中文").strip()
     默认任务 = str(brief.get("默认任务") or "t2v").strip()
 
@@ -67,6 +68,8 @@ def 构建提示词生成prompt(brief: dict, segments: list, 技能: str = "不�
         + f"共{len(段行)}段，按段编号顺序撰写提示词：\n" + "\n".join(段行)
         + f"\n请用{语言}输出每段提示词。严格输出 JSON，不要多余文字。"
     )
+    if 详细内容:
+        user += f"\n\n## 详细要求\n{详细内容}"
 
     技能 = str(技能 or "不指定").strip()
     辅助 = str(辅助 or "无").strip()
@@ -197,6 +200,7 @@ def 构建局部重试prompt(brief: dict, segments: list, 目标索引: list, �
     平台 = str(brief.get("平台") or "通用").strip()
     风格 = str(brief.get("风格") or "").strip()
     受众 = str(brief.get("受众") or "").strip()
+    详细内容 = str(brief.get("详细内容") or "").strip()
     语言 = str(brief.get("语言") or "中文").strip()
     默认任务 = str(brief.get("默认任务") or "t2v").strip()
     目标集 = set(目标索引)
@@ -232,6 +236,8 @@ def 构建局部重试prompt(brief: dict, segments: list, 目标索引: list, �
         + f"共{len(段行)}段（其中 {目标数} 段标【需重写】），只重写标【需重写】的段：\n" + "\n".join(段行)
         + f"\n请用{语言}输出目标段提示词。严格输出 JSON，不要多余文字。"
     )
+    if 详细内容:
+        user += f"\n\n## 详细要求\n{详细内容}"
 
     技能 = str(技能 or "不指定").strip()
     辅助 = str(辅助 or "无").strip()
@@ -276,3 +282,80 @@ def 局部重试(brief: dict, segments: list, 目标ids, opener, 技能: str = "
     for k, i in enumerate(目标索引):                     # 仅回写目标段，非目标段不动
         全段[i] = 新目标[k]
     return 全段
+
+
+# ================= A6：分批流式编排（供 /lvp/plan/prompts/stream；opener 注入，可脱离 HTTP 单测） =================
+
+默认批大小 = 5
+
+
+def 拆批(段索引, 批大小):
+    """按时间轴顺序把目标段索引切成连续批次；批大小<1 兜底为 1。"""
+    批大小 = max(1, int(批大小))
+    return [段索引[i:i + 批大小] for i in range(0, len(段索引), 批大小)]
+
+
+def 目标索引(segments, 目标ids=None):
+    """纯函数：按时间轴顺序给出目标段下标（无 目标ids＝全部段；给了则只取 segment_id 命中去重目标集的段）。
+    不抛错，空清单合法。分批生成提示词 与 路由的 SSE meta 总批数 同走本函数，杜绝 k/N 分母漂移。"""
+    目标集 = {str(x) for x in (目标ids or []) if x not in (None, "")}
+    return [i for i, s in enumerate(segments or [])
+            if not 目标集 or str(s.get("segment_id") or "") in 目标集]
+
+
+def 分批生成提示词(brief, segments, opener, 目标ids=None, 批大小=默认批大小,
+                 技能="不指定", 辅助="无", 状态=None, 禁用字幕=False,
+                 每批回调=None, 停止=None):
+    """分批上下文链编排：目标超一批时逐批复用 局部重试 各发一次 LLM 调用。
+
+    上下文关联机制：每批结果即时合入工作副本，后批的只读上下文段行「画面草稿 …」
+    即前批成稿原文——顺序生成长内容并携带已生成前文（同 LangChain 长文递归生成范式），
+    段间衔接与角色一致性按真实上文撰写。
+    目标数 ≤ 批大小 → 单批分流旧原语（全量＝生成提示词、子集＝局部重试），行为逐字节同今天。
+    批失败策略：该批前无任何成功、或 LLM错误 类别=="config" → 直接上抛（整单 fatal）；
+    否则该批目标标 degraded（保留各自草稿）并继续后续批。
+    每批回调(k, 段副本列表, 批状态 dict)；停止() True → 下一批不发起（客户端断开）。
+    返回 {"segments": 最终全段, "批次总": n, "降级": 降级段数}。异常契约同 局部重试。"""
+    全段 = [dict(s) if isinstance(s, dict) else {} for s in (segments or [])]
+    if not 全段:
+        raise ValueError("分批生成：segments 为空")
+    目标集 = {str(x) for x in (目标ids or []) if x not in (None, "")}
+    索引 = 目标索引(全段, 目标ids)
+    if not 索引:
+        raise ValueError("分批生成：目标段清单为空或与 segment_id 不匹配")
+    if any(not str(全段[i].get("segment_id") or "") for i in 索引):
+        raise ValueError("分批生成：目标段缺少 segment_id，无法按批定位")
+    批次 = 拆批(索引, 批大小)
+    状态表 = 状态 if isinstance(状态, dict) else {}
+
+    if len(批次) == 1:                                   # 单批＝旧契约，不改变任何既有行为
+        批ids = [str(全段[i].get("segment_id") or "") for i in 批次[0]]
+        if not 目标集:
+            结果 = 生成提示词(brief, 全段, opener, 技能, 辅助, 状态=状态表, 禁用字幕=禁用字幕)
+        else:
+            结果 = 局部重试(brief, 全段, 批ids, opener, 技能, 辅助, 状态=状态表, 禁用字幕=禁用字幕)
+        if 每批回调:
+            每批回调(0, [dict(结果[i]) for i in 批次[0]], dict(状态表))
+        return {"segments": 结果, "批次总": 1,
+                "降级": sum(1 for v in 状态表.values() if v == "degraded")}
+
+    降级数 = 0
+    for k, 批 in enumerate(批次):
+        if 停止 is not None and 停止():
+            break
+        批ids = [str(全段[i]["segment_id"]) for i in 批]
+        批状态 = {}
+        try:
+            新全段 = 局部重试(brief, 全段, 批ids, opener, 技能, 辅助,
+                        状态=批状态, 禁用字幕=禁用字幕)
+        except RuntimeError as e:
+            if getattr(e, "类别", "") == "config" or not any(v == "ok" for v in 状态表.values()):
+                raise                              # 未配置/鉴权类整单无望；首批即败且零成果 → fatal 上抛
+            批状态 = {sid: "degraded" for sid in 批ids}
+            新全段 = 全段
+        全段 = 新全段
+        状态表.update(批状态)
+        降级数 += sum(1 for v in 批状态.values() if v == "degraded")
+        if 每批回调:
+            每批回调(k, [dict(全段[i]) for i in 批], dict(批状态))
+    return {"segments": 全段, "批次总": len(批次), "降级": 降级数}

@@ -22,9 +22,13 @@ function 注入样式() {
       /* 装饰 chip：仅前端可读性标记（subject_definitions:/[Shot N] 等），不引用素材、不可点击；
          换暖色调以与蓝色引用 chip 目视区分。选择器重叠 .lvp-chip 确保覆盖背景/文字色。 */
       .lvp-chip.lvp-chip-deco{background:#5a5145;color:#f0e0c8}
-      .lvp-缩略{position:relative;display:inline-flex;width:66px;height:66px;margin:0;border:1px solid var(--border-color,#3a3a3a);border-radius:6px;overflow:hidden;background:var(--comfy-input-bg,#1a1a1a);vertical-align:middle}
+      /* 缩略块整块可点＝打开 媒体预览.js 弹窗（图像放大/视频音频播放），故 cursor:pointer 放在块级而非媒图上
+         （.lvp-缩略媒 保持 pointer-events:none，点击落点始终是瓦片本身）。 */
+      .lvp-缩略{position:relative;display:inline-flex;width:66px;height:66px;margin:0;border:1px solid var(--border-color,#3a3a3a);border-radius:6px;overflow:hidden;background:var(--comfy-input-bg,#1a1a1a);vertical-align:middle;cursor:pointer}
       .lvp-缩略媒{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
-      .lvp-音标{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:33px;color:#9ec1e8;background:#1f2a33}
+      /* 音频占位＝与 规划素材区 同一套观感（用户 2026-09-30 裁定「两墙统一」）：♪ 是文本字形、吃 color，
+         取绿色 token；底衬不再自铺蓝调，直接继承 .lvp-缩略 的 --comfy-input-bg，别只改字色留半块蓝底。 */
+      .lvp-音标{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:33px;color:var(--p-green-400,#7ee0a3)}
       .lvp-缩略 b{position:absolute;right:1px;top:1px;padding:0 3px;font-size:10px;line-height:14px;color:#fff;background:rgba(0,0,0,.6);border-radius:4px;cursor:pointer}
       /* 参考区/右列均内容宽、组间 8px 紧凑排布；多余宽度全归中间提示词区（flex:1 独占）。
    素材框左右内距 8px＝原 4px＋约 7px 滚动条预留位对称合并取整（2026-09-24 用户订正「框内间距有问题」：
@@ -176,6 +180,7 @@ export function 创建编辑页面板(编辑页, 上下文) {
         计划已加载,
         取规划编辑状态,
         应用规划: (segments) => 应用规划(segments),   // 新增（D7）
+        取在途: () => !!状态.取("LLM请求在途"),   // B3：加载计划与流式生成互斥
     });
     const 右列 = document.createElement("div");
     右列.className = "lvp-右列";

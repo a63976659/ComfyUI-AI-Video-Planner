@@ -66,7 +66,7 @@ function 校验名(名) {
     return 净;
 }
 
-export function 创建计划数据(容器, { 取节点, 计划已加载, 取规划编辑状态 }) {
+export function 创建计划数据(容器, { 取节点, 计划已加载, 取规划编辑状态, 取在途 }) {
     const 组 = document.createElement("label");
     // margin-left:auto 把整组推到工具行最右（工具行不换行；窄屏溢出时 auto 边距归零，本组紧随前组继续排）
     组.style.cssText = "display:flex;align-items:center;gap:4px;margin-left:auto";
@@ -195,6 +195,8 @@ export function 创建计划数据(容器, { 取节点, 计划已加载, 取规�
 
     async function 加载(名) {
         if (!名) return;
+        // B3：加载会写 时间轴数据 + 剪辑草稿，流式批窗口内做这事会互相作废（两边都报错），一律先拒。
+        if (取在途?.()) { toast("AI 生成提示词进行中，请等待完成后再加载计划"); 加载sel.value = ""; return; }
         const node = 取节点?.();
         if (!node) { toast("请先在画布上创建/选中一个长视频规划师节点"); 加载sel.value = ""; return; }
         // 跨 await（覆盖确认 + 网络）后目标节点可能已换绑/删除/重配/内容被编辑：先捕获节点快照，

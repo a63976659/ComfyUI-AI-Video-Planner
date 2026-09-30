@@ -7,6 +7,7 @@
 import json
 import logging
 import math
+import os
 import re
 
 from .方法论 import (
@@ -108,6 +109,74 @@ _技能注入指令 = (
 )
 
 
+_文本单档上限 = 4000
+_文本总预算 = 12000
+
+
+def _素材清单(brief: dict) -> list:
+    """brief.素材 → 有序去重的 [(名,类型)]；非 dict 项/无名/无类型跳过。类型枚举不做校验（路由已拦），此处只透传。"""
+    出, 见 = [], set()
+    for m in (brief.get("素材") or []):
+        if not isinstance(m, dict):
+            continue
+        名 = str(m.get("名") or "").strip()
+        型 = str(m.get("类型") or "").strip()
+        if 名 and 型 and 名 not in 见:
+            见.add(名)
+            出.append((名, 型))
+    return 出
+
+
+def _读取文本素材(清单: list, 回执: dict = None) -> str:
+    """类型=文本 的素材从媒体根按名读正文（utf-8 errors=replace），单档/总量截断；读失败计入 缺失 不阻断。"""
+    选 = [名 for 名, 型 in 清单 if 型 == "文本"]
+    if not 选:
+        # 无「文本」条目也如实回执（契约：素材非空时 回执["素材"] 必反映入数），供校验归一/前端读取
+        if isinstance(回执, dict):
+            回执["素材"] = {"入": len(清单), "文本": 0, "截断": 0, "缺失": []}
+        return ""
+    try:
+        # 媒体根解析整体受保护：宿主外（folder_paths 缺失）或环境异常时视为根不可用，
+        # 全部文本素材计入 缺失 并如实回执，不阻断构建提示词（本函数契约＝读失败不阻断）。
+        try:
+            from ..后端路由.媒体路由 import 媒体根
+        except ImportError:
+            from 后端路由.媒体路由 import 媒体根
+        根 = 媒体根()
+    except Exception:
+        if isinstance(回执, dict):
+            回执["素材"] = {"入": len(清单), "文本": len(选), "截断": 0, "缺失": list(选)}
+        return ""
+    部, 总, 缺, 截 = [], 0, [], 0
+    for 名 in 选:
+        if _文本总预算 - 总 <= 0:
+            缺.append(名)      # 预算已尽：读前即计缺失，不打开文件、不计截断，回执如实
+            continue
+        try:
+            # 限量读：单档最终只保留 ≤_文本单档上限 字，读 上限+1 即可判定是否截断；
+            # 文本模式 read(n) 逐字解码，杜绝超大 txt 一次性读满内存（媒体上传流式无大小上限）。
+            with open(os.path.join(根, os.path.basename(名)), "r", encoding="utf-8", errors="replace") as f:
+                文 = f.read(_文本单档上限 + 1)
+        except OSError:
+            缺.append(名)
+            continue
+        截断 = False
+        if len(文) > _文本单档上限:
+            文 = 文[:_文本单档上限]
+            截断 = True
+        余 = _文本总预算 - 总
+        if len(文) > 余:
+            文 = 文[:余]
+            截断 = True
+        总 += len(文)          # 只累计正文，「…（截断）」后缀不计入预算，免总预算被后缀侵蚀
+        if 截断:
+            截 += 1            # 单档与总预算双命中也只计一次，免同一档重复计数
+        部.append(f"【{名}】\n{文}" + ("…（截断）" if 截断 else ""))
+    if isinstance(回执, dict):
+        回执["素材"] = {"入": len(清单), "文本": len(选), "截断": 截, "缺失": 缺}
+    return "\n\n".join(部)
+
+
 def 构建提示词(brief: dict, 回执: dict = None) -> tuple:
     """返回 (system, user)（设计 §7.1）。brief 缺失字段用默认兜底；主题必填校验在路由侧。
     选了「风格技能」时把对应 MiniMax-H3知识库 文档注入，令每段「画面」按该技能视觉/镜头/提示词规范撰写。
@@ -127,6 +196,8 @@ def 构建提示词(brief: dict, 回执: dict = None) -> tuple:
     辅助风格 = str(brief.get("辅助风格") or "无").strip()
     默认任务 = str(brief.get("默认任务") or "t2v").strip()
     每段建议时长 = str(brief.get("每段建议时长") or "").strip()   # 范围字符串如 "5-8"，仅供 LLM 控制分镜节奏，不参与校验归一
+    详细内容 = str(brief.get("详细内容") or "").strip()
+    清单 = _素材清单(brief)
 
     system = (
         "你是资深短视频分镜导演，精通黄金3秒、钩子设计、情绪曲线、节奏控制与完播率优化。"
@@ -134,6 +205,7 @@ def 构建提示词(brief: dict, 回执: dict = None) -> tuple:
         'JSON 结构固定为：{"segments":[{"职能":"钩子|开场|建立|递进|冲突|高潮|反转|结尾|CTA",'
         '"标题":"段标题/章节名","画面":"画面描述（主体/动作/镜头/光线/氛围）",'
         '"字幕":"台词或字幕文案","情绪":"情绪曲线标注","钩子":"仅首段填钩子类型","时长":整数秒}]}。'
+        '素材相关为可选：段内可加 "使用素材":["素材名"]，顶层可加 "全局素材":["素材名"]，只能逐字引用「可用素材」清单中的名称。'
         "画面描述只写视觉内容，不要添加分辨率、像素尺寸或画幅比例等输出参数。"
         f"每段时长必须在 {MIN_SEG}-{MAX_SEG} 秒之间；首段职能必须是「钩子」；末段职能必须是「结尾」或「CTA」。"
     )
@@ -147,6 +219,17 @@ def 构建提示词(brief: dict, 回执: dict = None) -> tuple:
         + f"默认钩子类型：{钩子类型}\n"
         + f"请用{语言}产出每段的 标题/字幕/画面。严格输出 JSON，不要多余文字。"
     )
+    if 详细内容:
+        user += f"\n\n## 详细要求\n{详细内容}"
+    if 清单:
+        user += "\n\n## 可用素材\n" + "\n".join(f"- {名}（{型}）" for 名, 型 in 清单)
+        user += ("\n请判定素材用法：整片通用的素材输出顶层 \"全局素材\":[名]；仅某段使用的在该段输出 \"使用素材\":[名]；"
+                 "i2v/r2v/v2v 等任务类型的选用应与素材类型匹配；「文本」类仅作背景资料不参与分配。")
+        正文 = _读取文本素材(清单, 回执)
+        if 正文:
+            user += "\n\n## 文本素材内容\n" + 正文
+    elif isinstance(回执, dict) and brief.get("素材"):
+        回执["素材"] = {"入": 0, "文本": 0, "截断": 0, "缺失": []}
 
     # 知识库注入（仅当选中具体技能）：加载失败优雅降级为无知识库，不让整次规划失败
     是Skills技能 = 风格技能 != "不指定" and 风格技能 in 技能选项()
@@ -272,6 +355,21 @@ def 校验归一(segments, brief: dict, 诊断: dict = None) -> list:
     默认任务 = str(brief.get("默认任务") or "t2v")
     用户上限 = int(brief.get("段数上限") or 0)
 
+    可用名 = {名 for 名, _ in _素材清单(brief)}
+    过滤数 = 0
+    if isinstance(segments, dict):
+        g = segments.get("全局素材")
+        if isinstance(g, list):
+            留 = []
+            for x in g:
+                名 = str(x).strip()
+                if 名 and 名 in 可用名 and 名 not in 留:
+                    留.append(名)
+                elif 名:
+                    过滤数 += 1
+            if 留 and isinstance(诊断, dict):
+                诊断["全局素材"] = 留
+
     # 段数约束（§6.3.5）：可行域 [下限, 上限]，下限=ceil(总/MAX_SEG) 保证时长能覆盖满，
     # 上限=min(总//MIN_SEG, 用户上限)。期望段数：用户设了上限→归一到该上限；否则尊重 LLM 自主分段。
     下限 = math.ceil(总时长 / MAX_SEG)
@@ -311,14 +409,14 @@ def 校验归一(segments, brief: dict, 诊断: dict = None) -> list:
         钩子 = str(_取(raw, "钩子", "hook")).strip()
         if 钩子 not in HOOK_TYPES:
             钩子 = HOOK_TYPES[0] if i == 0 else ""   # 非法清空；仅首段兜底默认钩
-        d = float(时长[i])
-        out.append({
+        段时长 = float(时长[i])
+        d = {
             "task": 默认任务,
             # 画面→prompt（§6.1）；兼容不同模型字段名（prompt/description/scene/画面描述/内容）
             "prompt": str(_取(raw, "画面", "prompt", "description", "scene", "画面描述", "内容")),
             "refs": {},
             "start": 起,
-            "end": 起 + d,
+            "end": 起 + 段时长,
             "run": True,
             "职能": 职能,
             "职能色": 角色配色(职能),                 # §6.3.6 后端查表写入
@@ -326,8 +424,21 @@ def 校验归一(segments, brief: dict, 诊断: dict = None) -> list:
             "字幕": str(_取(raw, "字幕", "subtitle", "caption", "台词", "text")),
             "情绪": str(_取(raw, "情绪", "emotion", "mood")),
             "钩子": 钩子,
-        })
-        起 += d
+        }
+        用 = []
+        if isinstance(raw.get("使用素材"), list):  # 非 list 视同缺省，与顶层 全局素材 同口径
+            for x in raw["使用素材"]:
+                名 = str(x).strip()
+                if 名 and 名 in 可用名 and 名 not in 用:
+                    用.append(名)
+                elif 名:
+                    过滤数 += 1
+        if 用:
+            d["使用素材"] = 用      # 缺省＝无键
+        out.append(d)
+        起 += 段时长
+    if 过滤数 and isinstance(诊断, dict):
+        诊断["素材过滤数"] = 过滤数
     return out
 
 
@@ -366,7 +477,7 @@ def 规划(brief: dict, opener) -> dict:
     """编排：构建提示词 → opener(system,user) → 提取JSON → 校验归一，返回 {segments:[...]}。
     降级策略（设计 §7.1）：LLM 调用/解析/校验任一失败 → 不静默吞、不伪造 demo 段，
     抛带上下文的 RuntimeError（路由转 502/500 + {error}）。opener 签名 (system,user)->str。
-    选了知识库时，结果附 `knowledge` 回执（A5：included/truncated/skipped/missing），供界面回显实际来源。
+    选了知识库或使用素材时，结果附 `knowledge` 回执（A5：included/truncated/skipped/missing；用素材时并 `素材:{入,文本,截断,缺失[],过滤}`），供界面回显实际来源。
     A3：段数不足时最多进行一次定向修复（要求拆得更细、禁止复制）；仍不足则作为未完成草稿
     返回有效段与 `diagnostics`（不再静默复制末段冒充故事完整）。"""
     回执 = {}
@@ -395,4 +506,13 @@ def 规划(brief: dict, opener) -> dict:
         }
     if 回执.get("知识库") is not None:            # A5：仅当确有知识库装配（选了技能）才附回执
         结果["knowledge"] = 回执["知识库"]
+    if 回执.get("素材") is not None and (
+            回执["素材"]["入"] or 回执["素材"]["截断"] or 回执["素材"]["缺失"]):
+        # 设计 §5.2：素材过滤/截断/缺失并入 knowledge 回执（新增 素材 子对象），前端 A5 行追加显示
+        结果.setdefault("knowledge", {})["素材"] = {
+            **回执["素材"], "过滤": 诊断.get("素材过滤数", 0)}
+    if 诊断.get("全局素材"):
+        结果["全局素材"] = 诊断["全局素材"]
+    if 诊断.get("素材过滤数"):
+        结果.setdefault("diagnostics", {})["素材过滤数"] = 诊断["素材过滤数"]
     return 结果
