@@ -163,7 +163,7 @@ function 注入样式() {
       @container (min-height:100px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:4}}
       @container (min-height:140px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:7}}
       @container (min-height:180px) and (min-width:111px){.lvp-ct-词{-webkit-line-clamp:10}}
-      .lvp-ct.忙 .lvp-ct-行,.lvp-ct.忙 .lvp-ct-卷{pointer-events:none;opacity:.55}`;
+      .lvp-ct.忙 .lvp-ct-把手,.lvp-ct.忙 .lvp-ct-时长入,.lvp-ct.忙 .lvp-ct-选,.lvp-ct.忙 .lvp-ct-开关{pointer-events:none;opacity:.45}`;
     document.head.appendChild(s);
     样式已注入.v = true;
 }
@@ -182,7 +182,7 @@ export function 创建剪辑时间轴(容器, ctx) {
     let 选择集 = new Set();     // 多选索引集（Ctrl/Shift）
     let 拖 = null;               // 拖拽状态机 {型:"trim"|"移"|"scrub"|"平移",...}（参照 AIVideo_node this.drag）
     let 收平移 = null;
-    let 忙 = false;              // I1：AI 生成提示词期间冻结编辑面，防 await 窗口内的结构编辑被返回覆盖丢失
+    let 忙 = false;              // I1：AI 生成提示词期间只冻结结构编辑（trim/重排/分割/增删/启用/时长/字幕/填充），浏览类（滚动/缩放/平移/scrub/点选看卡）放行，批窗口内可即时查看已生成结果
 
     const 根 = document.createElement("div");
     根.className = "lvp-ct";
@@ -250,13 +250,13 @@ export function 创建剪辑时间轴(容器, ctx) {
         缩放入.title = `时间轴缩放 ${倍文} 倍`;
         缩放入.setAttribute("aria-valuetext", `${倍文} 倍`);
         if (倍标) 倍标.textContent = `${倍文}×`;
-        const 禁用 = 忙 || !总;
+        const 禁用 = !总;   // 缩放是浏览动作，忙期不锁（I1 只锁结构编辑）
         缩放入.disabled = 适配钮.disabled = 禁用;
         缩小钮.disabled = 禁用 || 缩放 <= 1;
         放大钮.disabled = 禁用 || 缩放 >= 最大缩放;
     }
     function 设缩放(值, 适配 = false) {
-        if (忙 || 拖 || !总时长()) { 刷缩放视图(); return; }
+        if (拖 || !总时长()) { 刷缩放视图(); return; }
         const 新值 = Math.min(最大缩放, Math.max(1, 值));
         if (!Number.isFinite(新值)) return;
         const 宽 = 基宽(), 总 = 总时长(), 新内容 = 内容宽(新值, 宽);
@@ -546,7 +546,7 @@ export function 创建剪辑时间轴(容器, ctx) {
     }
 
     function 起卡(e, i) {
-        if (忙 || e.button !== 0) return;
+        if (e.button !== 0) return;
         e.stopPropagation(); e.preventDefault();   // 阻止拖动时的原生文字选择
         const rect = 内.getBoundingClientRect();
         // 选择语义：Ctrl/Cmd 切换、Shift 连选、普通单选（并置 active）
@@ -554,6 +554,7 @@ export function 创建剪辑时间轴(容器, ctx) {
         else if (e.shiftKey) { const a = active(); const lo = Math.min(a, i), hi = Math.max(a, i); 选择集 = new Set(); for (let k = lo; k <= hi; k++) 选择集.add(k); }
         else { 选择集 = new Set([i]); 设active(i); }
         刷active();
+        if (忙) return;   // I1：忙期点选查看放行（只改 UI 选中态，不写草稿），重排拖拽禁止
         拖 = { 型: "移", i, startX: e.clientX, 内宽: rect.width, 总时长: 总时长(), 移动: false, 目标: null };
         window.addEventListener("pointermove", 移卡);
         window.addEventListener("pointerup", 收卡, { once: true });
@@ -584,7 +585,7 @@ export function 创建剪辑时间轴(容器, ctx) {
     }
 
     function 起scrub(e) {
-        if (忙 || e.button !== 0) return;
+        if (e.button !== 0) return;   // 播放头是浏览态，忙期放行
         e.stopPropagation(); e.preventDefault();
         const rect = 内.getBoundingClientRect();
         拖 = { 型: "scrub", 内宽: rect.width, 总时长: 总时长(), left: rect.left };
@@ -602,14 +603,14 @@ export function 创建剪辑时间轴(容器, ctx) {
 
     // 标尺（连续时间刻度那条）拖拽＝横向平移视口：放大后看不到两端的段时，除了滚动条还能像剪辑器那样拖着看。
     function 起平移(e) {
-        if (忙 || 拖 || e.button !== 0 || !卷El || !总时长()) return;
+        if (拖 || e.button !== 0 || !卷El || !总时长()) return;   // 平移是浏览动作，忙期放行（请求发起时入口已 收平移?.() 取消在途拖拽）
         e.preventDefault();
         const 卷 = 卷El, 线 = 时间线El, 节点 = 取节点(), 代 = 渲染代;
         const 起点 = e.clientX, 起始 = 卷.scrollLeft;
         const 本次 = 拖 = { 型: "平移" };
         线.classList.add("拖中");
         const 移 = (ev) => {
-            if (忙 || 拖 !== 本次 || 取节点() !== 节点 || 渲染代 !== 代) { 收(); return; }
+            if (拖 !== 本次 || 取节点() !== 节点 || 渲染代 !== 代) { 收(); return; }
             卷.scrollLeft = 起始 - (ev.clientX - 起点);
             记视口起点(); 排时间线();
         };
@@ -630,7 +631,7 @@ export function 创建剪辑时间轴(容器, ctx) {
     // 滚轮缩放（参照 CapCut：时间轴上滚轮＝缩放）；触控板横滑（deltaX 为主）不截留，交给原生滚动条平移。
     function 滚轮缩放(e) {
         if (拖?.型 === "平移") { e.preventDefault(); return; }
-        if (忙 || 拖 || !总时长()) return;
+        if (拖 || !总时长()) return;   // 滚轮缩放是浏览动作，忙期放行
         if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
         e.preventDefault();
         设缩放(缩放 * 2 ** (-e.deltaY * (e.ctrlKey ? 0.01 : 0.0025)));   // ctrl+滚轮（捏合）更灵敏
@@ -695,7 +696,7 @@ export function 创建剪辑时间轴(容器, ctx) {
     //   整合局部重试原设计：文档/规格/2026-09-21-AI生成提示词整合局部重试-设计.md
     //   分批流式方案：文档/计划/2026-09-28-提示词生成分批流式-实现计划.md
     // B4 批内回显：流式期间不能调 渲染()（根.replaceChildren 会重建 DOM，摘掉正显示 k/N 进度的按钮），
-    //   故按 segment_id 定位卡片、只改 .lvp-ct-词 文本。忙期编辑面冻结（无增删/重排），卡片下标与 段组() 同序。
+    //   故按 segment_id 定位卡片、只改 .lvp-ct-词 文本。忙期结构编辑面冻结（无增删/重排），卡片下标与 段组() 同序。
     function 刷段卡提示词(新词表) {
         新词表.forEach((词, id) => {
             const i = 段组().findIndex((seg) => String(seg?.segment_id ?? "") === id);
@@ -735,7 +736,7 @@ export function 创建剪辑时间轴(容器, ctx) {
         if (模型sel?.value) body.模型id = 模型sel.value;
         使节点快照失效(n);
         收平移?.();
-        忙 = true; 根.classList.add("忙");   // I1：冻结编辑面（批窗口内用户编辑一律被守卫拒绝，按批增量写回安全）
+        忙 = true; 根.classList.add("忙");   // I1：冻结结构编辑面（批窗口内增删/重排/时长等一律被守卫拒绝，按批增量写回安全）；浏览类交互放行，批结果可即时查看
         状态.设("LLM请求在途", true);   // B3：跨入口互斥旗标（生成规划/应用规划/加载计划据此早退）
         b提示.disabled = b填充.disabled = true;   // 忙期两键统一灰化（与 渲染/填充节点 同模式，外观自洽）
         钮.disabled = true; const 原内容 = [...钮.childNodes]; 钮.textContent = "生成提示词中…";
@@ -964,8 +965,9 @@ export function 创建剪辑时间轴(容器, ctx) {
         字幕框.checked = 读草稿().禁用字幕 === true;
         字幕框.disabled = 忙 || !节点 || !有段;         // 生成期间不得改，避免与在途请求的 body 语义不一致；零段时与「台词估时」同口径禁用（勾了无处生效，且只含开关的空草稿会被计划存档判成「缺草稿」而在加载时丢掉）
         字幕框.onchange = () => {
-            // 忙期 checkbox 未被程序禁用（禁用只在 渲染() 设，而 生成提示词() 进 忙 时不重渲染；
-            //   CSS `.lvp-ct.忙 .lvp-ct-行{pointer-events:none}` 挡得住鼠标、挡不住 Tab+Space），故在入口拒绝并回退真源。
+            // 忙期 checkbox 未被程序禁用（禁用只在 渲染() 设，而 生成提示词() 进 忙 时不重渲染）；
+            //   CSS `.lvp-ct.忙 .lvp-ct-开关{pointer-events:none}`（pointer-events 可继承，连内部 input 一起挡）
+            //   挡得住鼠标、挡不住 Tab+Space，故在入口拒绝并回退真源。
             if (忙) { 字幕框.checked = 读草稿().禁用字幕 === true; return; }
             写草稿(段组(), { 禁用字幕: 字幕框.checked });
         };

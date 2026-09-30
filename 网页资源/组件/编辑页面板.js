@@ -16,7 +16,10 @@ function 注入样式() {
       .lvp-提示词{flex:1 1 200px;min-width:170px;display:flex;flex-direction:column}
       .lvp-编辑区{flex:1;min-height:44px;overflow-y:auto;padding:4px 6px;background:var(--comfy-input-bg,#1c1c1c);border:1px solid var(--border-color,#3a3a3a);border-radius:6px;white-space:pre-wrap}
       .lvp-工具行{display:flex;gap:4px;flex:0 0 auto;min-width:0;overflow-x:auto;margin-bottom:3px}
-      .lvp-工具行>*{flex-shrink:0}
+      /* white-space:nowrap 不可省：标签文字是 label 的匿名 flex 项，默认 flex-shrink:1 且
+         min-width:auto＝最小内容宽（中文可逐字断行 → 1 个字），行内被压缩时「百万像素」会断成两排。
+         nowrap 让这段文字的最小宽＝整词宽，标签随之压不动，只能走本行的横向滚动。 */
+      .lvp-工具行>*{flex-shrink:0;white-space:nowrap}
       .lvp-说明行{flex:0 0 auto;margin-top:3px;color:var(--p-text-muted-color,#8c8c8c);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .lvp-chip{display:inline-block;margin:0 2px;padding:0 6px;background:#3a5f8a;border-radius:8px;color:#cfe6ff}
       /* 装饰 chip：仅前端可读性标记（subject_definitions:/[Shot N] 等），不引用素材、不可点击；

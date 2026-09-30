@@ -6,6 +6,9 @@
   "max_tokens": 4096,
   "timeout": 600,
   "verify_ssl": true,
+  "max_response_bytes": 2097152,
+  "llm_max_active": 2,
+  "llm_max_queued": 4,
   "api_models": [
     {
       "id": "Kimi-K3",
@@ -30,6 +33,14 @@
       "model": "glm-5.3-flash",
       "builtin": true,
       "api_key": ""
+    },
+    {
+      "id": "custom_32220_0",
+      "name": "Qwen3.8-omni",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3.8-omni-flash",
+      "builtin": false,
+      "api_key": "sk-ws-H.PRIIHXM.siDd.MEUCIF8hEErtzQPeU22Abc3c4oCLN8LGCqqkYmOxeziLXrRXAiEAkoW33uSMJNmr795aaotnW74dKIwTnBWrdDK00v4pSYc"
     }
   ]
 }

@@ -411,6 +411,14 @@ Set the environment variable `H3_计时=1` and the log breaks each segment into 
 
 ## Changelog
 
+**2026-10-01**
+
+- While AI prompts are being generated, the clip timeline is no longer frozen as a whole: scrolling, zooming, panning, dragging the playhead and opening a segment card to read it all work as usual — only the actions that change structure (trim, split, delete, drag-to-reorder, the enable switch, duration and subtitle editing, Fill Nodes) are un-clickable during generation.
+- Same change: the things that would have no effect if clicked during generation now dim out as well — the per-segment duration box, the three Skill/Auxiliary-style/Model dropdowns in the generate row, the "disable subtitles" switch and the drag handles at both ends of a card — so nothing looks clickable but does nothing.
+- Same change: each batch is written back and its segment cards refresh as soon as that batch finishes, so you can read the results while the remaining batches are still running.
+- The structure types for long videos went from 9 to 20: added Development, Transition, Explanation, Case, Evidence, Build-up, Suspense, Wind-down, Aftertaste, Summary and Teaser, each with its own background colour — the Structure dropdown in the right-hand per-segment panel, the colour bar on the card and the AI side all pick it up at once.
+- The first segment is still "Hook". The last one is no longer limited to "Ending / CTA": any of the five ending-flavoured types is accepted — "Ending", "CTA", "Summary", "Aftertaste" or "Teaser" — and anything else in that slot (e.g. "Climax", "Development") is rewritten to "Ending"; middle segments are chosen by the AI from the 20.
+
 **2026-09-30**
 
 - The zoom slider no longer sits on top of the "N segments" label: when the panel narrows it scrolls along with the rest of the toolbar (fixed on both the Prompt Timeline page and the in-node timeline).
