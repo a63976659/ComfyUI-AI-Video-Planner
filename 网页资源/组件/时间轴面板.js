@@ -65,10 +65,15 @@ function 注入样式() {
       .lvp-tl-缩放{display:inline-flex;align-items:center;gap:2px;flex:0 0 auto}
       .lvp-tl-缩放钮{padding:2px 5px;gap:0}
       .lvp-tl-缩放钮 svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
-      .lvp-tl-缩放入{appearance:none;width:64px;height:3px;margin:0 2px;border:0;border-radius:2px;background:var(--tl-line2);cursor:pointer;flex:0 0 auto}
-      .lvp-tl-缩放入::-webkit-slider-thumb{appearance:none;width:9px;height:14px;border:0;border-radius:3px;background:var(--fg-color,#eee)}
-      .lvp-tl-缩放入::-moz-range-thumb{width:9px;height:14px;border:0;border-radius:3px;background:var(--fg-color,#eee)}
-      .lvp-tl-缩放入:disabled{opacity:.38;cursor:not-allowed}
+      /* 同装的其他节点（radiance）会注入未加作用域的全局规则 input[type=range]{width:100%!important;
+         height:16px!important;background:transparent!important} 及 thumb/track 的 !important 覆写，
+         让本条细线被拉成整行宽、盖住右侧概要文字。input[type=range] 权重 0-1-1 高于单类，
+         故须同时抬到两层类（0-2-0）并对被覆写的属性补 !important 才压得住。 */
+      .lvp-tl-缩放 .lvp-tl-缩放入{appearance:none!important;width:43px!important;height:3px!important;margin:0 2px;border:0;border-radius:2px;background:var(--tl-line2)!important;cursor:pointer;flex:0 0 auto}
+      .lvp-tl-缩放 .lvp-tl-缩放入::-webkit-slider-runnable-track{height:3px!important;background:transparent!important;border:none!important}
+      .lvp-tl-缩放 .lvp-tl-缩放入::-webkit-slider-thumb{appearance:none!important;width:9px!important;height:14px!important;border:0!important;border-radius:3px!important;background:var(--fg-color,#eee)!important;margin-top:-5.5px!important}
+      .lvp-tl-缩放 .lvp-tl-缩放入::-moz-range-thumb{width:9px!important;height:14px!important;border:0!important;border-radius:3px!important;background:var(--fg-color,#eee)!important}
+      .lvp-tl-缩放入:disabled{opacity:.38;cursor:not-allowed!important}
       .lvp-tl-缩放钮:focus-visible,.lvp-tl-缩放入:focus-visible{outline:2px solid var(--tl-acc);outline-offset:2px}
       .lvp-tl-倍{color:var(--tl-mut);font-size:10px;min-width:28px;text-align:right;font-variant-numeric:tabular-nums}
 

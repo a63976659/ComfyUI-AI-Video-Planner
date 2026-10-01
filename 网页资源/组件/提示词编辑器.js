@@ -122,7 +122,11 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     const 百万像素滑 = document.createElement("input");
     百万像素滑.type = "range";
     百万像素滑.min = "0.1"; 百万像素滑.max = "4"; 百万像素滑.step = "0.1";
-    百万像素滑.style.cssText = "width:110px;accent-color:var(--p-primary-color,#4a9eff)";
+    // 🔒 行内 !important 是必需的：同装的 radiance 节点注入过 `input[type=range]{appearance:none!important;
+    //   width:100%!important}`，非 important 的规则（含普通行内样式）一律压不住；important 层里行内最高，
+    //   且 appearance 复位成 auto 后浏览器走原生绘制，它的 ::-webkit-slider-thumb 覆写与透明背景随之失效，
+    //   accent-color 也才重新生效（appearance:none 的原生着色通道是关着的）。
+    百万像素滑.style.cssText = "width:110px !important;-webkit-appearance:auto !important;appearance:auto !important;accent-color:var(--p-primary-color,#4a9eff)";
     const 百万像素值 = document.createElement("span");
     百万像素值.style.cssText = "min-width:30px;text-align:right;color:var(--fg-color,#ddd)";
     function 刷新百万像素读数() { 百万像素值.textContent = Number(百万像素滑.value).toFixed(1); }

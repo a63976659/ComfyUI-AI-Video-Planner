@@ -16,9 +16,12 @@ function 注入样式() {
       .lvp-提示词{flex:1 1 200px;min-width:170px;display:flex;flex-direction:column}
       .lvp-编辑区{flex:1;min-height:44px;overflow-y:auto;padding:4px 6px;background:var(--comfy-input-bg,#1c1c1c);border:1px solid var(--border-color,#3a3a3a);border-radius:6px;white-space:pre-wrap}
       .lvp-工具行{display:flex;gap:4px;flex:0 0 auto;min-width:0;overflow-x:auto;margin-bottom:3px}
-      /* white-space:nowrap 不可省：标签文字是 label 的匿名 flex 项，默认 flex-shrink:1 且
-         min-width:auto＝最小内容宽（中文可逐字断行 → 1 个字），行内被压缩时「百万像素」会断成两排。
-         nowrap 让这段文字的最小宽＝整词宽，标签随之压不动，只能走本行的横向滚动。 */
+      /* flex-shrink:0 让本行子项只溢出横滚、不被压窄（2026-09-24 单排化时定的）。
+         white-space:nowrap 是第二道闸：子项自己不被压，但子项**内部**那截标签文字是 label 的匿名
+         flex 项（默认 flex-shrink:1、min-width:auto＝中文可逐字断到 1 个字），只要 label 的内容宽
+         被里面的控件吃掉就会断成两排——实测「百万像素」两排的成因正是隔壁节点把滑块 width 顶成
+         100%（滑块 144px、label 高 28px），不是本行把它挤窄（行宽压到 300px 时它仍单排）。
+         根治在 提示词编辑器.js 的滑块宽度，这里兜住同类「控件撑爆 label」的复发。 */
       .lvp-工具行>*{flex-shrink:0;white-space:nowrap}
       .lvp-说明行{flex:0 0 auto;margin-top:3px;color:var(--p-text-muted-color,#8c8c8c);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .lvp-chip{display:inline-block;margin:0 2px;padding:0 6px;background:#3a5f8a;border-radius:8px;color:#cfe6ff}

@@ -418,6 +418,9 @@ Set the environment variable `H3_计时=1` and the log breaks each segment into 
 - Same change: each batch is written back and its segment cards refresh as soon as that batch finishes, so you can read the results while the remaining batches are still running.
 - The structure types for long videos went from 9 to 20: added Development, Transition, Explanation, Case, Evidence, Build-up, Suspense, Wind-down, Aftertaste, Summary and Teaser, each with its own background colour — the Structure dropdown in the right-hand per-segment panel, the colour bar on the card and the AI side all pick it up at once.
 - The first segment is still "Hook". The last one is no longer limited to "Ending / CTA": any of the five ending-flavoured types is accepted — "Ending", "CTA", "Summary", "Aftertaste" or "Teaser" — and anything else in that slot (e.g. "Climax", "Development") is rewritten to "Ending"; middle segments are chosen by the AI from the 20.
+- Fixed a problem that wasn't caused by this plugin: another custom node installed on this machine rewrites every range slider globally, which had stretched the zoom sliders above both timelines to the full row width so they covered the text on the right. The clip-timeline slider is now 61px and the in-node one 43px, and the text is no longer covered — a plain page refresh is enough, no host restart needed.
+- Same change: the "Megapixels" slider on the prompt editing page was stretched the same way and pushed the "Megapixels" label onto two lines. It is back to the native slider look at 110px and the label sits on one line again.
+- Same change: when a slider is greyed out and un-draggable, the mouse pointer used to be forced back into the "clickable" shape; it now shows the not-allowed pointer.
 
 **2026-09-30**
 
