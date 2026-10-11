@@ -28,9 +28,16 @@ def _数(value, name, lo=0, hi=120):
 
 def 校验镜头设计(shot, 强制=False, 强制声音=False):
     clean = {}
+    fallback = {"镜头目的": shot.get("职能")}
+    movement = shot.get("运镜设计")
+    if isinstance(movement, dict):
+        fallback.update({"起始状态": movement.get("起点"), "结束状态": movement.get("终点")})
     for key in 文字字段:
-        if key in shot or (强制 and key != "切镜理由"):
-            clean[key] = _文本(shot.get(key), key, required=强制 and key != "切镜理由")
+        value = shot.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            value = fallback.get(key, value)
+        if key in shot or value is not None or (强制 and key != "切镜理由"):
+            clean[key] = _文本(value, key, required=强制 and key != "切镜理由")
     for key, fields in 对象字段.items():
         if key not in shot:
             continue

@@ -60,7 +60,7 @@ def _修复尾逗号(text: str) -> str:
 
 def 提取JSON(text: str):
     """4 层策略提取 JSON（设计 §7.1）：① 直接 → ② ```json``` 块 → ③ 最外层 {} → ④ 最外层 []。
-    每层先「直接解析」保留正文原样；失败才做字符串感知的有限尾逗号修复再解析；全部失败抛 ValueError。"""
+    每层先直接解析；失败才清理尾逗号，或补齐末尾数组前漏写的一个对象闭合符；不补全截断正文。"""
     if not isinstance(text, str) or not text.strip():
         raise ValueError("LLM 返回内容为空")
     for 候选 in _候选(text):
@@ -68,10 +68,17 @@ def 提取JSON(text: str):
             return json.loads(候选)                    # 先直接解析：合法正文（含 ,} ,]）绝不经过修复
         except (json.JSONDecodeError, ValueError):
             pass
+        修复 = _修复尾逗号(候选)
         try:
-            return json.loads(_修复尾逗号(候选))         # 仅失败时才修复尾逗号（不触碰字符串内容）
-        except (json.JSONDecodeError, ValueError):
-            continue
+            return json.loads(修复)
+        except ValueError as error:
+            if (isinstance(error, json.JSONDecodeError) and error.msg == "Expecting ',' delimiter"
+                    and 修复[error.pos:error.pos + 1] == "]"
+                    and re.fullmatch(r"[}\]\s]+", 修复[error.pos:])):
+                try:
+                    return json.loads(修复[:error.pos] + "}" + 修复[error.pos:])
+                except ValueError:
+                    pass
     raise ValueError("无法从 LLM 输出提取合法 JSON")
 
 
