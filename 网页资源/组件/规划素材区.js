@@ -1,3 +1,4 @@
+import { 取操作忙, 开始操作, 结束操作 } from "./操作锁.js";
 import { app } from "../../../scripts/app.js";
 import { 真源, 捕获节点快照, 提交节点快照 } from "./桥接/节点桥.js";
 import { 打开媒体预览 } from "./媒体预览.js";
@@ -98,7 +99,7 @@ function 显名(瓦, 文) {
 }
 function 隐名() { if (名浮层) 名浮层.style.display = "none"; }
 
-export function 创建规划素材区(容器, { 取节点 }) {
+export function 创建规划素材区(容器, { 取节点, 状态 }) {
     注入样式();
     const 根 = document.createElement("div");
     根.className = "lvp-规材";
@@ -173,16 +174,16 @@ export function 创建规划素材区(容器, { 取节点 }) {
         加.onclick = () => 输入.click();
         框.appendChild(加);
     }
-    // 重建式写草稿：保态携带 禁用字幕/segments/brief，其余缺省不写键；删名同步剔除引用
+    // 保留草稿扩展字段（制作/实体/工作流等）；删名同步剔除规划素材引用。
     function 写回(新清单, 快照) {
         const 已提交 = 提交节点快照(快照, 取节点(), (目标) => {
             const 草 = 真源.读剪辑草稿(目标);
-            const 写 = { brief: 草.brief || {}, segments: 草.segments || [] };
-            if (草?.禁用字幕 === true) 写.禁用字幕 = true;
+            const 写 = { ...草, brief: 草.brief || {}, segments: 草.segments || [] };
             const 名集 = new Set(新清单.map((x) => x.名));
-            if (新清单.length) 写.素材 = 新清单;
+            if (草.素材理解 && typeof 草.素材理解 === "object") 写.素材理解 = Object.fromEntries(Object.entries(草.素材理解).filter(([名]) => 名集.has(名)));
+            if (新清单.length) 写.素材 = 新清单; else delete 写.素材;
             const 全 = (草.全局素材 || []).filter((n) => 名集.has(n));
-            if ((草.全局素材 || []).length && 全.length) 写.全局素材 = 全;
+            if (全.length) 写.全局素材 = 全; else delete 写.全局素材;
             写.segments = (草.segments || []).map((s) => {
                 if (!Array.isArray(s?.使用素材) || !s.使用素材.length) return s;
                 const 用 = s.使用素材.filter((n) => 名集.has(n));
@@ -196,25 +197,31 @@ export function 创建规划素材区(容器, { 取节点 }) {
         return 已提交;
     }
     async function 上传(文件组) {
+        if (取操作忙(状态)) return;
         const 节点 = 取节点();
         if (!节点) { toast("请先绑定长视频规划师节点", "error"); return; }
         const 快照 = 捕获节点快照(节点, ["剪辑草稿"]);
         const 现有 = 读清单().slice();
-        let 变了 = false;
-        for (const f of 文件组) {
-            const 型 = 按扩展名定类型(f.name);
-            if (!型) { toast(`不支持的文件类型：${f.name}（限图/视/音/txt/md）`, "warn"); continue; }
-            const fd = new FormData(); fd.append("file", f);
-            try {
-                const r = await fetch("/lvp/media/upload", { method: "POST", body: fd });
-                const j = await r.json().catch(() => ({}));
-                if (!r.ok) throw new Error(j?.error || `上传失败（${r.status}）`);
-                if (!现有.some((m) => m.名 === j.name)) { 现有.push({ 名: j.name, 类型: 型 }); 变了 = true; }
-            } catch (e) { toast(`${f.name}：${e.message}`, "error"); }
-        }
-        if (变了 && 写回(现有, 快照)) 渲染();
+        const 令牌 = 开始操作(状态, "上传规划素材");
+        if (!令牌) return;
+        try {
+            let 变了 = false;
+            for (const f of 文件组) {
+                const 型 = 按扩展名定类型(f.name);
+                if (!型) { toast(`不支持的文件类型：${f.name}（限图/视/音/txt/md）`, "warn"); continue; }
+                const fd = new FormData(); fd.append("file", f);
+                try {
+                    const r = await fetch("/lvp/media/upload", { method: "POST", body: fd });
+                    const j = await r.json().catch(() => ({}));
+                    if (!r.ok) throw new Error(j?.error || `上传失败（${r.status}）`);
+                    if (!现有.some((m) => m.名 === j.name)) { 现有.push({ 名: j.name, 类型: 型 }); 变了 = true; }
+                } catch (e) { toast(`${f.name}：${e.message}`, "error"); }
+            }
+            if (变了 && 写回(现有, 快照)) 渲染();
+        } finally { 结束操作(状态, 令牌); }
     }
     function 删除(名) {
+        if (取操作忙(状态)) return;
         const 节点 = 取节点(); if (!节点) return;
         const 快照 = 捕获节点快照(节点, ["剪辑草稿"]);
         if (写回(读清单().filter((m) => m.名 !== 名), 快照)) 渲染();
@@ -224,6 +231,7 @@ export function 创建规划素材区(容器, { 取节点 }) {
     // ⚠️ 快照必须在 await 确认框**之前**捕获：弹窗开着时别处（另一页/另一次上传）改了草稿，
     //   提交校验会判失效并 toast 未生效，绝不会把别人的新草稿覆盖成空。
     async function 清空() {
+        if (取操作忙(状态)) return;
         const 节点 = 取节点();
         if (!节点) { toast("请先绑定长视频规划师节点", "error"); return; }
         const 清单 = 读清单();
@@ -231,15 +239,21 @@ export function 创建规划素材区(容器, { 取节点 }) {
         if (!清单.length) { toast("没有可清空的素材"); return; }
         const 快照 = 捕获节点快照(节点, ["剪辑草稿"]);
         const 计数 = 类型表.map((t) => `${t.型} ${清单.filter((m) => m.类型 === t.型).length}`).join("／");
-        const 确认 = await 弹确认("清空规划素材",
-            `将移除全部 ${清单.length} 条规划素材（${计数}），并同步剔除全局素材引用与各段「使用素材」引用；` +
-            "\n\n媒体库里的文件不会删除，之后可重新添加。确认清空？");
-        if (!确认) return;
-        // 写回成功必须紧跟 渲染()（同 上传/删除 口径）：只 toast 不重绘的话，墙上的瓦片、标题计数、
-        //   清空钮的 disabled 三处都停在清空前，看起来像「确认了却没生效」。
-        if (写回([], 快照)) { 渲染(); toast(`已清空 ${清单.length} 条规划素材（磁盘文件保留）`); }
+        const 令牌 = 开始操作(状态, "清空规划素材");
+        if (!令牌) return;
+        try {
+            const 确认 = await 弹确认("清空规划素材",
+                `将移除全部 ${清单.length} 条规划素材（${计数}），并同步剔除全局素材引用与各段「使用素材」引用；` +
+                "\n\n媒体库里的文件不会删除，之后可重新添加。确认清空？");
+            if (!确认) return;
+            // 写回成功必须紧跟 渲染()（同 上传/删除 口径）：只 toast 不重绘的话，墙上的瓦片、标题计数、
+            //   清空钮的 disabled 三处都停在清空前，看起来像「确认了却没生效」。
+            if (写回([], 快照)) { 渲染(); toast(`已清空 ${清单.length} 条规划素材（磁盘文件保留）`); }
+        } finally { 结束操作(状态, 令牌); }
     }
 
+    状态?.订阅?.(键 => { if (键 === "统一操作锁" || 键 === "LLM请求在途") 容器.inert = 取操作忙(状态); });
+    容器.inert = 取操作忙(状态);
     渲染();
     return { 刷新: 渲染 };
 }

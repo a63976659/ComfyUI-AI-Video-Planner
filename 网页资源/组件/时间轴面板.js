@@ -1,3 +1,4 @@
+import { 取操作忙 } from "./操作锁.js";
 // 节点内多段时间轴（DOM 富 widget）：分段运行轨道 + 标尺 + 工具条。
 // 真源仍是 node.widgets（时间轴数据/参考素材/运行选择 等 multiline JSON widget 被幽灵化隐藏，完整名单见下 幽灵widget；
 // 剪辑草稿 真源已迁 node.properties、隔离执行缓存，其 widget 仅幽灵化占位），
@@ -7,6 +8,7 @@ import { 任务码 } from "./生成类型选择.js";
 import { app } from "../../../scripts/app.js";
 import { 创建缓存面板 } from "./缓存面板.js";
 import { 分配中间帧 } from "./中间帧.js";
+import { 请求节点重置, 重置阻止原因, 订阅节点重置 } from "./节点重置.js";
 
 const 面板高 = 210;   // 时间轴最小高（弹性布局下限 --comfy-widget-min-height）；节点拉高时自动增大填满
 const 节点默认宽 = 420;   // 画布节点最小默认宽，避免 widget 拥挤
@@ -139,9 +141,9 @@ function 注入样式() {
       .lvp-tl-区间{margin-left:auto;color:var(--tl-dim);font-size:10px;white-space:nowrap;
         font-variant-numeric:tabular-nums}
 
-      /* 首帧图随卡片高度伸缩（flex:1，下限 44px）：节点拉高→卡片变高→缩略图放大铺满，
-         避免多余高度堆在提示词区留白（词固定 2 行）；img object-fit:cover 裁切填充。 */
-      .lvp-tl-图{position:relative;flex:1 1 44px;min-height:44px;margin:0 6px;border-radius:5px;
+      /* 图片与提示词采用相同的零基数弹性比例，各占一半可用高度。
+         小卡保留图片44px、提示词两行的下限；节点拉高时两区一起扩展。 */
+      .lvp-tl-图{position:relative;flex:1 1 0;min-height:44px;margin:0 6px;border-radius:5px;
         overflow:hidden;background:var(--comfy-input-bg,#101114)}
       .lvp-tl-图 img{width:100%;height:100%;object-fit:cover;display:block}
       .lvp-tl-图::after{content:"";position:absolute;inset:0;pointer-events:none;
@@ -150,9 +152,8 @@ function 注入样式() {
         color:var(--p-text-muted-color,#4e555d);font-size:10px;
         background:repeating-linear-gradient(135deg,var(--comfy-input-bg,#17191c),var(--comfy-input-bg,#17191c) 6px,var(--comfy-menu-secondary-bg,#1c1f23) 6px,var(--comfy-menu-secondary-bg,#1c1f23) 12px)}
 
-      .lvp-tl-词{flex:0 0 auto;margin:0 6px;color:var(--tl-mut);font-size:10px;
-        line-height:1.45;word-break:break-word;overflow:hidden;
-        display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+      .lvp-tl-词{flex:1 1 0;min-height:29px;margin:0 6px;color:var(--tl-mut);font-size:10px;
+        line-height:1.45;white-space:pre-wrap;word-break:break-word;overflow:hidden}
       .lvp-tl-词.空{color:var(--p-text-muted-color,#565c64);font-style:italic}
 
       .lvp-tl-标题{flex:0 0 auto;margin:0 6px;color:var(--tl-txt);font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -255,7 +256,8 @@ export function 挂载时间轴(node, 面板) {
 
     function 读段() { return (真源.读时间轴(node).segments) || []; }
     // 落盘＝只写 widget + 通知状态栏回填；写段＝落盘后整树重建（结构性增删才需要）。
-    function 落盘(段组) { 真源.写时间轴(node, { segments: 段组 }); 面板?.回填?.(); }
+    function 操作忙() { return 取操作忙(面板?.状态); }
+    function 落盘(段组) { if (操作忙()) return; 真源.写时间轴(node, { segments: 段组 }); 面板?.回填?.(); }
     function 写段(段组) { 落盘(段组); 渲染(); }
 
     // 多节点解耦：全局「选中段」只承载状态栏**当前绑定节点**的选中（供编辑页回填）；
@@ -350,8 +352,8 @@ export function 挂载时间轴(node, 面板) {
         标.title = "渐变过渡：开启则把上一段尾帧画面与约 1 秒尾音频作为续拍条件锚入下一段（官方 AddGuide 同款 latent 直传），接缝零重叠硬切、只对续拍段开头做低频色光衔接；续拍开头优先使用上段尾部，指定新首帧须关闭续拍；关闭则各段独立生成、接缝硬切、不做任何过渡处理（写入节点隐藏 widget「尾帧锚定」）";
         标.onclick = (e) => e.stopPropagation();
         const cb = document.createElement("input");
-        cb.type = "checkbox"; cb.checked = 真源.读尾帧锚定(node);
-        cb.onchange = () => 真源.写尾帧锚定(node, cb.checked);
+        cb.dataset.操作编辑 = "true"; cb.disabled = 操作忙(); cb.type = "checkbox"; cb.checked = 真源.读尾帧锚定(node);
+        cb.onchange = () => { if (操作忙()) { cb.checked = 真源.读尾帧锚定(node); return; } 真源.写尾帧锚定(node, cb.checked); };
         const 滑 = document.createElement("span");
         滑.className = "lvp-tl-滑";
         const 字 = document.createElement("span");
@@ -525,7 +527,7 @@ export function 挂载时间轴(node, 面板) {
         填图(图, s, 来源);
         卡.appendChild(图);
 
-        // 提示词预览（两行截断）：轨道上一眼能认出哪段是哪段，不必逐段点开状态栏
+        // 提示词预览随图片区一起扩展，节点拉高后可显示更多文字和原有换行。
         const 词 = document.createElement("div");
         填词(词, s);
         卡.appendChild(词);
@@ -596,6 +598,7 @@ export function 挂载时间轴(node, 面板) {
 
     // 改时长后不整树重建：就地改 end + 刷比例/区间/概要（保住输入框焦点与 hover 态）。
     function 改时长(i, 新秒) {
+        if (操作忙()) return;
         const 段组 = 读段();
         const s = 段组[i];
         if (!s) return;
@@ -616,10 +619,13 @@ export function 挂载时间轴(node, 面板) {
         const 减 = document.createElement("button");
         减.type = "button"; 减.textContent = "−"; 减.title = "减少 " + 吸附步 + "s";
         const 输 = document.createElement("input");
+        for (const el of [减, 输]) el.dataset.操作编辑 = "true";
         输.type = "number"; 输.step = String(吸附步); 输.min = String(吸附步);
         const 加 = document.createElement("button");
+        加.dataset.操作编辑 = "true";
         加.type = "button"; 加.textContent = "＋"; 加.title = "增加 " + 吸附步 + "s";
 
+        for (const el of [减, 输, 加]) el.disabled = 操作忙();
         function 回显() { 输.value = String(Math.round(秒数(读段()[i]) / 吸附步) * 吸附步); }
         function 提交(原始) {
             // spec 层隐藏 bug：`parseFloat(输.value || 吸附步)` 只兜空串，"abc"/undef 会产 NaN；
@@ -645,8 +651,9 @@ export function 挂载时间轴(node, 面板) {
         标.title = "本段是否参与生成（写入 运行选择/段.run）";
         标.onclick = (e) => e.stopPropagation();
         const cb = document.createElement("input");
-        cb.type = "checkbox"; cb.checked = !!s.run;
+        cb.dataset.操作编辑 = "true"; cb.disabled = 操作忙(); cb.type = "checkbox"; cb.checked = !!s.run;
         cb.onchange = () => {
+            if (操作忙()) { cb.checked = !!读段()[i]?.run; return; }
             const 段组 = 读段();
             if (!段组[i]) return;
             段组[i].run = cb.checked;
@@ -713,15 +720,25 @@ export function 挂载时间轴(node, 面板) {
             写段(段组);
         });
         const 全选 = 建钮("全选运行", "", "所有段都参与生成", () => { const 段组 = 读段(); 段组.forEach((s) => (s.run = true)); 写段(段组); });
+        const 重置 = 建钮("重置", "危", "恢复默认参数并清空当前创作（二次确认）", () => 请求节点重置(node));
+        重置.className += " lvp-tl-重置";
+        const 原因 = 重置阻止原因(node);
+        重置.disabled = !!原因;
+        if (原因) 重置.title = 原因;
         const 全不选 = 建钮("全不选", "", "所有段都不参与生成", () => { const 段组 = 读段(); 段组.forEach((s) => (s.run = false)); 写段(段组); });
+        for (const b of [新增, 删除, 裁剪, 全选, 全不选]) {
+            b.dataset.操作编辑 = "true";
+            const 动作 = b.onclick; b.onclick = (...args) => { if (!操作忙()) return 动作(...args); };
+        }
         const 锚定 = 建锚定开关();   // 全局开关，不随「有无段」禁用：无段时也可先设好再建段
-        删除.disabled = 裁剪.disabled = !有段;
-        全选.disabled = 全不选.disabled = !有段;
+        新增.disabled = 操作忙();
+        删除.disabled = 裁剪.disabled = 操作忙() || !有段;
+        全选.disabled = 全不选.disabled = 操作忙() || !有段;
         概要 = document.createElement("span");
         概要.className = "lvp-tl-概要";
         缓存面板.同步失效版本();
         const 撑 = document.createElement("div"); 撑.className = "lvp-tl-撑";
-        工具.append(新增, 删除, 裁剪, 全选, 全不选, 锚定, 缓存条, 撑, 缩放组, 概要);
+        工具.append(新增, 删除, 裁剪, 重置, 全选, 全不选, 锚定, 缓存条, 撑, 缩放组, 概要);
         根.appendChild(工具);
 
         const 卷 = document.createElement("div");
@@ -784,11 +801,22 @@ export function 挂载时间轴(node, 面板) {
     尺寸观察者?.observe(根);
     // 选中段变化只刷**绑定节点**的时间轴（非绑定节点高亮走本地，不受全局键影响）；
     // 绑定切换（换节点编辑）广播「绑定节点」键，全节点重刷以换选中数据源（全局↔本地）。
-    const 退订 = 面板?.状态?.订阅?.((键) => { if (键 === "选中段" && 是绑定()) 刷态(); else if (键 === "绑定节点") 刷态(); });
+    function 刷操作锁() {
+        if (!操作忙()) { 渲染(); return; }
+        for (const el of 根.querySelectorAll("button,input")) if (el.dataset?.操作编辑 === "true") el.disabled = true;
+    }
+    const 退订 = 面板?.状态?.订阅?.((键) => { if (键 === "统一操作锁" || 键 === "LLM请求在途") { 刷操作锁(); return; } if (键 === "选中段" && 是绑定()) 刷态(); else if (键 === "绑定节点") 刷态(); });
     面板?.设时间轴刷卡?.(刷卡);   // 供状态栏编辑段提示词/首帧/任务码后回调，局部刷新段卡
     面板?.设时间轴渲染?.(渲染);   // 供计划数据加载后回调，整树重建（段数/顺序都可能变）
     // 3.3(121)：状态桥.订阅 返回 cleanup，旧代码丢弃 → 面板重建（热载）/节点移除后本实例
     // 的订阅成为僵尸监听器，反复 挂载时间轴 会累积（内存泄漏 + 每次广播越刷越慢）。
     // 统一销毁出口：宿主在 node.onRemoved 里调 destroy()，把本实例订阅从状态桥摘掉。
-    return { 渲染, 刷卡, destroy: () => { 退订?.(); 尺寸观察者?.disconnect(); } };
+    const 退订重置 = 订阅节点重置(node, () => {
+        const b = 根.querySelector(".lvp-tl-重置");
+        if (!b) return;
+        const 原因 = 重置阻止原因(node); b.disabled = !!原因;
+        b.title = 原因 || "恢复默认参数并清空当前创作（二次确认）";
+    });
+    return { 渲染, 刷卡, 重置视图: () => { 本地选中 = 0; 缩放 = 1; 视图起点 = 0; 渲染(); },
+        destroy: () => { 退订?.(); 退订重置(); 尺寸观察者?.disconnect(); } };
 }

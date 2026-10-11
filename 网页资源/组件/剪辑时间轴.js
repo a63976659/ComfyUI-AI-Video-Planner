@@ -1,3 +1,4 @@
+import { 取操作忙, 开始操作, 结束操作 } from "./操作锁.js";
 // 剪辑时间轴（状态栏 AI规划页中间区）——预演草稿编辑器。
 // 真源＝node.properties.剪辑草稿（{brief,segments}，隔离执行缓存），经 桥接/节点桥.js 真源.读/写剪辑草稿 读写。
 // 🔒 铁律：本组件**只写剪辑草稿**，绝不写「时间轴数据」；「填充节点」经框架层 应用规划 才落节点真源。
@@ -5,9 +6,12 @@
 // 每段起点刻度行已废除（与连续时间线刻度重复），起止时间只出现在卡 title 与连续时间线上。
 // 交互参照 AIVideo_node/网页资源/时间线面板.js（边缘把手命中/拖拽状态机）与
 //   OpenCut（播放头处分割 split-at-playhead、删除后 ripple 闭拢、trim 为 rolling 边界）。
-import { 真源, 捕获节点快照, 提交节点快照, 使节点快照失效, 新段ID, 分配段ID } from "./桥接/节点桥.js";
+import { 真源, 捕获节点快照, 提交节点快照, 使节点快照失效, 新段ID, 分配段ID, 取上次编辑, 取下次编辑, 保存编辑记录 } from "./桥接/节点桥.js";
 import { 打开台词时长 } from "./台词时长面板.js";
+import { 默认台词设置, 台词估时详情, 取台词文本, 保护台词提示词 } from "./台词时长.js";
 import { 分配中间帧 } from "./中间帧.js";
+import { 取H3改写资料, 写入提示词生成结果 } from "./H3改写资料.js";
+import { 规划结果提示 } from "./规划结果提示.js";
 
 const 吸附步 = 0.5;
 const 最小时长 = 0.5;
@@ -87,6 +91,8 @@ function 注入样式() {
         border:1px solid var(--ct-line);border-radius:6px;font:11px system-ui;min-width:0;max-width:120px}
       .lvp-ct-标{color:var(--ct-mut);font-size:10px;white-space:nowrap}
       .lvp-ct-概要{color:var(--ct-mut);white-space:nowrap;font-variant-numeric:tabular-nums}
+      .lvp-ct-应用状态{font-size:10px;line-height:1.4;color:var(--ct-mut);flex:0 0 auto}
+      .lvp-ct-台词{flex:0 0 auto;color:var(--ct-mut);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       /* 缩放组右推靠撑位（非 margin-left:auto）：有余宽时撑位吃满→缩放组连同概要右靠；
          工具条溢出（面板变窄）时撑位 flex-basis:0 收成 0，缩放组与概要顺序紧跟左侧按钮、整条横向滚，
          不再出现 auto 边距在 overflow 容器里把缩放组钉在右缘、概要文字压上来的重叠。 */
@@ -147,8 +153,9 @@ function 注入样式() {
       .lvp-ct-素材{flex:0 0 auto;color:var(--ct-mut);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       @container (max-width:76px){.lvp-ct-素材{display:none}}
       .lvp-ct-角色{flex:0 1 auto;min-width:0;color:var(--seg);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      .lvp-ct-字幕{flex:0 0 auto;color:var(--ct-dim);font-size:10px;font-style:italic;
+      .lvp-ct-对白{flex:0 0 auto;color:var(--ct-dim);font-size:10px;font-style:italic;
         white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .lvp-ct-验收{flex:0 0 auto;font-size:9px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       .lvp-ct-词{flex:1 1 auto;min-height:0;color:var(--ct-mut);font-size:10px;line-height:1.35;overflow:hidden;
         display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
       .lvp-ct-把手{position:absolute;top:0;bottom:0;width:min(${把手px * 2}px,34%);cursor:ew-resize;z-index:2}
@@ -159,7 +166,7 @@ function 注入样式() {
       .lvp-ct-把手.左::after{left:${把手px - 1}px}
       .lvp-ct-把手.右::after{right:${把手px - 1}px}
       .lvp-ct-卡:hover .lvp-ct-把手::after{background:var(--ct-line2)}
-      @container (max-width:110px){.lvp-ct-字幕{display:none}}
+      @container (max-width:110px){.lvp-ct-对白{display:none}}
       @container (max-width:76px){.lvp-ct-标题{display:none}}
       @container (max-width:60px){.lvp-ct-区间:not(:focus-within){display:none}.lvp-ct-头:focus-within .lvp-ct-序,.lvp-ct-头:focus-within .lvp-ct-角色{display:none}}
       @container (max-width:44px){.lvp-ct-角色{display:none}.lvp-ct-词{-webkit-line-clamp:1}}
@@ -174,7 +181,7 @@ function 注入样式() {
 }
 
 // ctx（由 提示词时间轴页面板.js 注入，均为延迟求值 getter/回调）：取节点() / 状态 / 应用规划(segments) / 弹确认(标题,消息)
-// 返回：{渲染, 刷active, 填枚举(meta), 填模型(models,cfg), 取技能, 取辅助, 取模型id}
+// 返回：{渲染, 刷active}
 export function 创建剪辑时间轴(容器, ctx) {
     注入样式();
     const { 取节点, 状态, 应用规划, 弹确认 } = ctx;
@@ -187,26 +194,35 @@ export function 创建剪辑时间轴(容器, ctx) {
     let 选择集 = new Set();     // 多选索引集（Ctrl/Shift）
     let 拖 = null;               // 拖拽状态机 {型:"trim"|"移"|"scrub"|"平移",...}（参照 AIVideo_node this.drag）
     let 收平移 = null;
-    let 忙 = false;              // I1：AI 生成提示词期间只冻结结构编辑（trim/重排/分割/增删/启用/时长/字幕/填充），浏览类（滚动/缩放/平移/scrub/点选看卡）放行，批窗口内可即时查看已生成结果
+    let 忙 = false;              // I1：AI 生成提示词期间只冻结结构编辑（trim/重排/分割/增删/启用/时长/台词/填充），浏览类（滚动/缩放/平移/scrub/点选看卡）放行，批窗口内可即时查看已生成结果
 
     const 根 = document.createElement("div");
     根.className = "lvp-ct";
     容器.appendChild(根);
 
-    // 生成行下拉（技能/辅助/模型）：与 brief 区同源枚举（/lvp/plan_meta、/lvp/llm_config），共用知识库文件夹。
-    let 技能sel = null, 辅助sel = null, 模型sel = null;
-    let 生成行El = null, b提示 = null, b填充 = null;   // C1：生成行持久化，避免每次渲染重建下拉导致技能/辅助/模型选择被清空
+    // 模型由配置页按用途保存，技能固定为通用提示词改写。
+    let 生成行El = null, b提示 = null, b填充 = null, 停止生成 = null, 停止中 = false;
     let b台词 = null;
+    let 台词撤销 = null; // 仅在本次估时后的草稿仍完全相同时可撤销，不覆盖后续编辑。
+
+    function 操作忙() { return 忙 || 取操作忙(状态); }
+    状态.订阅(键 => {
+        if (键 === "统一操作锁" || 键 === "LLM请求在途") {
+            根.classList.toggle("忙", 操作忙());
+            if (!忙) 渲染(); // 流式生成期间保留进度按钮与读取器，不能重建整棵树。
+        }
+    });
 
     function 读草稿() { const n = 取节点(); return n ? 真源.读剪辑草稿(n) : { brief: {}, segments: [] }; }
     function 写草稿(段组, 顶层补丁) {
-        const n = 取节点(); if (!n) return;
+        const n = 取节点(); if (!n || 操作忙()) return;
         const 草 = 读草稿();
         // NaN 守卫（P-3 同源）：进 JSON.stringify 前挡非法数值，防转 null 损坏后端 float 契约
         for (const s of 段组) {
             if (!Number.isFinite(s.start)) s.start = 0;
             if (!Number.isFinite(s.end)) s.end = s.start;
             if (!(s.end > s.start)) s.end = s.start + 最小时长;   // I5：挡负/零时长，防后端静默补 5s
+            if (typeof s.台词 === "string") Object.assign(s, 保护台词提示词(s));
         }
         真源.写剪辑草稿(n, { ...草, ...顶层补丁, brief: 草.brief || {}, segments: 段组 });
     }
@@ -393,12 +409,12 @@ export function 创建剪辑时间轴(容器, ctx) {
         入.type = "text"; 入.inputMode = "decimal"; 入.value = 时长文本(秒数(s));
         入.ariaLabel = `第${i + 1}段时长（秒）`;
         入.title = `点击输入时长；回车或失焦提交，Esc取消；支持小数，范围${最小时长}–${最大输入时长}秒`;
-        入.disabled = 忙;
+        入.disabled = 操作忙();
         const 单位 = document.createElement("span"); 单位.textContent = "s";
         区.append(入, 单位);
         const 节点 = 取节点(), 代 = 渲染代;
         let 取消 = false;
-        const 可编辑 = () => !忙 && 节点 && 取节点() === 节点 && 代 === 渲染代;
+        const 可编辑 = () => !操作忙() && 节点 && 取节点() === 节点 && 代 === 渲染代;
         const 取输入时长 = () => {
             const 文 = 入.value.trim();
             return /^(?:\d+(?:\.\d+)?|\.\d+)$/.test(文) ? Number(文) : NaN;
@@ -463,20 +479,13 @@ export function 创建剪辑时间轴(容器, ctx) {
         return b;
     }
 
-    // C1：生成行（技能/辅助/模型下拉 + AI生成提示词 + 填充节点）只建一次并持久复用，
-    //     使 填枚举/填模型 的选项与用户已选值活过每次 渲染() 的整树重建。
+    // 生成按钮只建一次，重绘时间轴时保留按钮状态。
     function 建生成行() {
         if (生成行El) return 生成行El;
         const 生成 = document.createElement("div"); 生成.className = "lvp-ct-行";
-        const 标1 = document.createElement("span"); 标1.className = "lvp-ct-标"; 标1.textContent = "技能";
-        技能sel = document.createElement("select"); 技能sel.className = "lvp-ct-选"; 技能sel.title = "提示词生成所用风格技能（共用 MiniMax-H3知识库）";
-        const 标2 = document.createElement("span"); 标2.className = "lvp-ct-标"; 标2.textContent = "辅助";
-        辅助sel = document.createElement("select"); 辅助sel.className = "lvp-ct-选"; 辅助sel.title = "辅助风格（仅供借鉴融合）";
-        const 标3 = document.createElement("span"); 标3.className = "lvp-ct-标"; 标3.textContent = "模型";
-        模型sel = document.createElement("select"); 模型sel.className = "lvp-ct-选"; 模型sel.title = "本次提示词生成使用的 API 模型";
-        b提示 = 建钮("✨ AI生成提示词", "主", "对启用段生成提示词：全部启用时整批生成；部分启用时其余段作只读上下文，仅回写启用段", (e) => 生成提示词(e.currentTarget));
+        b提示 = 建钮("✨ AI生成提示词", "主", "逐段优化启用段的已有提示词，每次一段；仅用主题、当前目标和本段资料，生成后立即回写", (e) => 停止生成 ? 停止生成() : 生成提示词(e.currentTarget));
         b填充 = 建钮("⬆ 填充节点", "", "把启用草稿段一键填充到节点时间轴（覆盖确认后写「时间轴数据」用于生成）；非全启用时仅填充启用段并闭拢时间，全部启用时填充所有段", 填充节点);
-        生成.append(标1, 技能sel, 标2, 辅助sel, 标3, 模型sel, b提示, b填充);
+        生成.append(b提示, b填充);
         生成行El = 生成;
         return 生成行El;
     }
@@ -513,7 +522,7 @@ export function 创建剪辑时间轴(容器, ctx) {
     }
 
     function 起trim(e, i, 边) {
-        if (忙 || e.button !== 0) return;
+        if (操作忙() || e.button !== 0) return;
         e.stopPropagation(); e.preventDefault();
         const g = 段组(); const rect = 时间几何();
         拖 = { 型: "trim", i, 边, startX: e.clientX, 内宽: rect.width, 总时长: 总时长(),
@@ -559,7 +568,7 @@ export function 创建剪辑时间轴(容器, ctx) {
         else if (e.shiftKey) { const a = active(); const lo = Math.min(a, i), hi = Math.max(a, i); 选择集 = new Set(); for (let k = lo; k <= hi; k++) 选择集.add(k); }
         else { 选择集 = new Set([i]); 设active(i); }
         刷active();
-        if (忙) return;   // I1：忙期点选查看放行（只改 UI 选中态，不写草稿），重排拖拽禁止
+        if (操作忙()) return;   // I1：忙期点选查看放行（只改 UI 选中态，不写草稿），重排拖拽禁止
         拖 = { 型: "移", i, startX: e.clientX, 内宽: rect.width, 总时长: 总时长(), 移动: false, 目标: null };
         window.addEventListener("pointermove", 移卡);
         window.addEventListener("pointerup", 收卡, { once: true });
@@ -644,12 +653,16 @@ export function 创建剪辑时间轴(容器, ctx) {
 
     // ── 工具动作（一律现读 段组()，写草稿后整树重建） ──
     async function 分割() {
-        if (忙) return;
+        if (操作忙()) return;
         const g = 段组(); const 总 = 总时长();
         const p = 吸附(Math.min(总, Math.max(0, 播放头)));   // I4：分割点吸附 0.5s 网格
         const i = g.findIndex((s) => p - s.start >= 最小时长 && s.end - p >= 最小时长);
         if (i < 0) { if (g.length) await 弹确认("无法分割", "分割点需距所在段两端各 ≥0.5s。"); return; }
         const s = g[i];
+        if (s.配音计时 || s.refs?.台词配音) {
+            await 弹确认("请按配音句界拆段", "此段已有配音切片。请在「台词估时」导入句级时间戳后预览重排，避免手动分割重复整段配音。");
+            return;
+        }
         // 分割产生两个新实体：必须各自铸一个全新 segment_id（A3）。
         //   不能沿用父段 id：展开 {...s} 会把父 id 复制给两半（重复），故显式重赋两个不同新 id。
         const 左 = { ...s, end: p, refs: 深拷refs(s.refs), segment_id: 新段ID() };
@@ -663,14 +676,14 @@ export function 创建剪辑时间轴(容器, ctx) {
     // 手动新建：不经「生成规划」也能直接在时间轴上补一段空白段供编辑（参照 时间轴面板.js 的「＋新增段」）。
     // 末尾追加 5s（与节点侧同参，且兑住后端 I5 的静默补 5s）；全新实体须铸 segment_id（A3）供拖动/分割/保存往返保持身份。
     function 新建() {
-        if (忙 || !取节点()) return;   // 未绑定节点时写入是空操作（写草稿 内 !n 直接 return），与 生成提示词 同套节点守卫
+        if (操作忙() || !取节点()) return;   // 未绑定节点时写入是空操作（写草稿 内 !n 直接 return），与 生成提示词 同套节点守卫
         const g = 段组();
         const 末 = g.length ? g[g.length - 1].end : 0;
         g.push({ task: "t2v", prompt: "", start: 末, end: 末 + 5, run: true, 启用: true, segment_id: 新段ID() });
         写草稿(g); 选择集 = new Set([g.length - 1]); 设active(g.length - 1); 渲染();
     }
     function 删除() {
-        if (忙) return;
+        if (操作忙()) return;
         const g = 段组();
         const idx = [...(选择集.size ? 选择集 : new Set([active()]))].sort((a, b) => b - a);
         idx.forEach((i) => g.splice(i, 1));
@@ -681,71 +694,98 @@ export function 创建剪辑时间轴(容器, ctx) {
     // 触发方式承旧「运行/停」：选中（或多选）后点击切换；未显式置 false 的段一律视为启用（兼容旧草稿无该字段）。
     const 是启用 = (s) => s?.启用 !== false;
     function 切启用() {
-        if (忙) return;
+        if (操作忙()) return;
         const g = 段组();
         const idx = [...(选择集.size ? 选择集 : new Set([active()]))];
         const 目标 = !idx.every((i) => 是启用(g[i]));   // 有任一未启用 → 全启用；否则全不启用
         idx.forEach((i) => { if (g[i]) g[i].启用 = 目标; });
         写草稿(g); 渲染();
     }
-    function 设全启用(值) {
-        if (忙) return;
+    function 全选() {
+        if (操作忙()) return;
         const g = 段组();
-        g.forEach((s) => { s.启用 = 值; });
-        写草稿(g); 渲染();
+        选择集 = new Set(g.map((_, i) => i));
+        刷态();
     }
     // 提示词生成（A6 批级 SSE＝唯一 LLM 入口 POST /lvp/plan/prompts/stream）：
-    //   全部启用 → body 不带 目标段ids；非全启用 → 带 启用段id清单（A2 定位语义不变，全部段仍作只读上下文上传，
-    //   未启用段也参与衔接）。服务端按 批大小（默认 5）拆批、逐批复用局部重试契约（后批上文＝前批成稿），
+    //   全部启用 → body 不带 目标段ids；非全启用 → 带 启用段id清单（A2 定位语义不变，全部段仅供本地定位，
+    //   模型不接收邻段）。服务端始终逐段处理，改写及审查不传前段成稿，
     //   每批完成即推 batch 事件；前端现读真源、按 segment_id 增量写回草稿，批内降级段保留原画面草稿。
     //   整合局部重试原设计：文档/规格/2026-09-21-AI生成提示词整合局部重试-设计.md
     //   分批流式方案：文档/计划/2026-09-28-提示词生成分批流式-实现计划.md
     // B4 批内回显：流式期间不能调 渲染()（根.replaceChildren 会重建 DOM，摘掉正显示 k/N 进度的按钮），
     //   故按 segment_id 定位卡片、只改 .lvp-ct-词 文本。忙期结构编辑面冻结（无增删/重排），卡片下标与 段组() 同序。
+    function 刷段卡验收(卡, 段) {
+        if (!卡) return;
+        const 报告 = 段?.提示词生成;
+        let 标签 = 卡.querySelector?.(".lvp-ct-验收");
+        if (typeof 报告?.完成 !== "boolean") { 标签?.remove(); return; }
+        if (!标签) {
+            标签 = document.createElement("div"); 标签.className = "lvp-ct-验收";
+            卡.insertBefore(标签, 卡.querySelector?.(".lvp-ct-词"));
+        }
+        标签.textContent = 报告.完成 ? "已生成" : "生成失败 · 保留原稿";
+        标签.title = 报告.完成 ? "本段已直接生成并更新提示词" : (报告.问题 || []).join("；");
+        标签.style.color = 报告.完成 ? "#78cf9c" : "#f1b66a";
+    }
+
     function 刷段卡提示词(新词表) {
         新词表.forEach((词, id) => {
             const i = 段组().findIndex((seg) => String(seg?.segment_id ?? "") === id);
             const 词El = i >= 0 ? 卡片组[i]?.querySelector?.(".lvp-ct-词") : null;
             if (词El) 词El.textContent = 词.trim() || "（未填提示词）";
+            if (i >= 0) 刷段卡验收(卡片组[i], 段组()[i]);
         });
     }
 
     async function 生成提示词(钮) {
-        if (忙) return;
-        if (状态.取("LLM请求在途")) { await 弹确认("另一项 AI 请求进行中", "生成规划尚未结束，请等待完成后再发起。"); return; }
-        const n = 取节点(); if (!n) return;
+        if (操作忙()) return;
+        if (取操作忙(状态)) { await 弹确认("另一项 AI 请求进行中", "请等待当前 AI 请求完成后再发起。"); return; }
+        const n = 取节点(); if (!n || 操作忙()) return;
         const 草 = 读草稿(); const g = 草.segments || [];
         if (!g.length) { await 弹确认("无草稿段", "请先「生成规划」得到草稿段。"); return; }
         // item2：仅对「启用」段跑 AI；未启用段保持原 prompt 不动
         const 启用idx = [];
         g.forEach((s, i) => { if (是启用(s)) 启用idx.push(i); });
-        if (!启用idx.length) { await 弹确认("无启用段", "所有段均未启用，请先「启用」或「全部启用」至少一段。"); return; }
+        if (!启用idx.length) { await 弹确认("无启用段", "所有段均未启用，请选中需要的段后点击「启用」，或先「全选」再点击「启用」。"); return; }
         // 旧草稿缺 id 的段：发起前补齐（分配段ID 幂等只补缺）并落盘——重试契约的目标定位不再弹窗拦截
-        if (g.some((s) => s && (typeof s.segment_id !== "string" || !s.segment_id))) { 分配段ID(g); 写草稿(g); }
+        if (g.some((s) => s && (typeof s.segment_id !== "string" || !s.segment_id))) {
+            分配段ID(g);
+            // 补齐定位ID不是内容编辑，不触发台词保护改写；失败时原提示词必须保持原样。
+            真源.写剪辑草稿(n, { ...草, segments: g }, { 记录历史: false });
+        }
+        const 提醒 = 规划结果提示(草.规划资料);
+        if (提醒.待完善) await 弹确认("规划尚有待完善项", `${提醒.说明 || "请检查人物、台词和素材是否定稿。"}\n本次仅处理当前启用段，未解决的剧情或来源问题请回 AI规划完善。`);
+        if (取节点() !== n || 操作忙() || JSON.stringify(读草稿()) !== JSON.stringify(草)) return;
         const 全启用 = 启用idx.length === g.length;
         const 目标ids = 全启用 ? [] : 启用idx.map((i) => String(g[i].segment_id));
-        // 禁用字幕开关（草稿顶层键）：上传段换成浅拷贝并剥掉 字幕/台词时长提示，同时把标记带给后端
-        //   （后端据此整段不拼「字幕 …」节、system 追加屏上文字禁令）。只影响本次请求的副本；
-        //   草稿里的字幕一个字节不动，台词估时/段卡/右列照旧（规格 §4/§6.5）。
+        // 禁用字幕仅约束生成画面的屏上文字，不影响台词和声音计划。
         const 禁用字幕 = 草.禁用字幕 === true;
         const 上传段 = (段) => {
             if (!禁用字幕) return 段;
-            const { 字幕: _删, 台词时长提示: _删2, ...其余 } = 段 || {};
+            const { 台词时长提示: _删, ...其余 } = 段 || {};
+            if (typeof _删 === "string" && _删) {
+                其余.prompt = String(其余.prompt || "").replaceAll(_删, "");
+            }
             return 其余;
         };
+        const 待改写 = ctx.取填充段?.(g, 草) || g;
         const body = {
-            brief: 草.brief || {}, segments: 全启用 ? 启用idx.map((i) => 上传段(g[i])) : g.map(上传段),
-            风格技能: 技能sel?.value || "不指定", 辅助风格: 辅助sel?.value || "无", 禁用字幕,
+            brief: 草.brief || {}, segments: 待改写.map(上传段),
+            风格技能: "通用提示词改写", 禁用字幕,
+            改写资料: 取H3改写资料(草, n),
         };
         if (!全启用) body.目标段ids = 目标ids;
-        if (模型sel?.value) body.模型id = 模型sel.value;
         使节点快照失效(n);
         收平移?.();
         忙 = true; 根.classList.add("忙");   // I1：冻结结构编辑面（批窗口内增删/重排/时长等一律被守卫拒绝，按批增量写回安全）；浏览类交互放行，批结果可即时查看
         状态.设("LLM请求在途", true);   // B3：跨入口互斥旗标（生成规划/应用规划/加载计划据此早退）
-        b提示.disabled = b填充.disabled = true;   // 忙期两键统一灰化（与 渲染/填充节点 同模式，外观自洽）
-        钮.disabled = true; const 原内容 = [...钮.childNodes]; 钮.textContent = "生成提示词中…";
-        let 总批 = 1, 已收批 = 0, 降级数 = 0, 落地过 = false, 致命 = null;
+        b填充.disabled = true;
+        const 原内容 = [...钮.childNodes];
+        const 编辑批次 = {};
+        let 总批 = 1, 已收批 = 0, 降级数 = 0, 落地过 = false, 致命 = null, 结束事件 = null;
+        const 完成目标 = new Set();
+        const 生成问题 = [];
         // 目标段集＝本单允许改写的段：批事件只带目标段，但前端仍按清单过滤——
         //   非目标段（如未启用的段）即使出现在响应里也不落盘，承旧「响应篡改禁用段 prompt 不生效」锁。
         const 目标集 = new Set(全启用 ? g.map((s) => String(s.segment_id)) : 目标ids);
@@ -771,11 +811,17 @@ export function 创建剪辑时间轴(容器, ctx) {
                     const id = seg.segment_id != null ? String(seg.segment_id) : null;
                     if (id == null || !按ID.has(id)) return;   // 非本批段不动
                     const 新词 = 按ID.get(id)?.prompt;
-                    if (批状态[id] === "degraded" || typeof 新词 !== "string" || !新词.trim()) { 降级数++; return; }
-                    seg.prompt = 新词;
-                    新词表.set(id, 新词);
+                    const 新段 = 按ID.get(id);
+                    if (批状态[id] === "degraded" || 新段?.提示词生成?.完成 === false || typeof 新词 !== "string" || !新词.trim()) {
+                        写入提示词生成结果(seg, 新段);
+                        生成问题.push(`${seg.标题 || id}：${(新段?.提示词生成?.问题 || ["未返回完整提示词"]).join("；")}`);
+                        新词表.set(id, seg.prompt || "");
+                        降级数++; return;
+                    }
+                    if (!写入提示词生成结果(seg, 新段)) seg.prompt = 新词;
+                    新词表.set(id, seg.prompt);
                 });
-                真源.写剪辑草稿(目标, 草现);
+                真源.写剪辑草稿(目标, 草现, { 编辑批次 });
                 落地 = true;
             });
             if (!已提交 || !落地) return false;
@@ -783,31 +829,67 @@ export function 创建剪辑时间轴(容器, ctx) {
             const 新基线 = 捕获节点快照(现);
             基线 = 新基线 ? Object.assign(新基线, { 代数: 代数0 }) : null;
             落地过 = true;
+            ctx.回填当前段?.();
             return true;
         };
+        const 请求控制 = new AbortController();
+        let 用户停止 = false;
+        停止中 = false;
+        停止生成 = () => {
+            if (停止中) return;
+            用户停止 = 停止中 = true; b提示.disabled = true;
+            b提示.title = "正在停止，已完成结果保留";
+            请求控制.abort(); reader?.cancel().catch(() => {});
+        };
+        b提示.textContent = "停止生成"; b提示.title = "保留已完成段，停止后续处理"; b提示.disabled = false;
+        let reader = null, 等待计时 = null, 整单计时 = null, 超时原因 = "";
+        const 自动停止等待 = 原因 => {
+            超时原因 = 原因;
+            请求控制.abort();
+            reader?.cancel().catch(() => {});
+        };
+        const 更新等待期限 = () => {
+            clearTimeout(等待计时);
+            等待计时 = setTimeout(() => 自动停止等待("连接等待超过95秒，已自动停止。"), 95000);
+        };
+        // 后端逐段等待期限与收尾余量；心跳不延长整单期限。
+        整单计时 = setTimeout(() => 自动停止等待("提示词改写达到任务耗时上限，已自动停止。"),
+            (目标集.size * 600 + 720) * 1000);
+        更新等待期限();
         try {
             const resp = await fetch("/lvp/plan/prompts/stream", {
                 method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+                signal: 请求控制.signal,
             });
             if (!resp.ok) {
                 const 数据 = await resp.json().catch(() => ({}));
                 throw new Error(数据?.error || `请求失败（${resp.status}）`);
             }
-            const reader = resp.body?.getReader?.();
+            reader = resp.body?.getReader?.();
             if (!reader) throw new Error("本环境不支持流式响应（fetch ReadableStream reader 缺失）");
             const 处理事件 = (名, 数据) => {
                 if (名 === "meta") 总批 = 数据?.总批数 || 1;
+                else if (名 === "progress") {
+                    if (!停止中) 钮.title = `点击停止生成 · ${数据.批次}/${数据.总批数} 段 · ${数据.阶段} · 调用 ${数据.调用}`;
+                }
                 else if (名 === "batch") {
+                    const 本批 = (数据.segments || []).filter(s => 目标集.has(String(s?.segment_id)) && !完成目标.has(String(s.segment_id)));
+                    if (!本批.length) return;
                     已收批 += 1;
-                    if (!写批次(数据.segments, 数据.promptStatus || {})) {
-                        致命 = `节点或草稿已变化，第 ${已收批} 批起结果被丢弃${落地过 ? `，前 ${已收批 - 1} 批已保留` : ""}，请重试`;
+                    if (!写批次(本批, 数据.promptStatus || {})) {
+                        致命 = `节点或草稿已变化，第 ${已收批} 段起结果被丢弃${落地过 ? `，前 ${已收批 - 1} 段已保留` : ""}，请重试`;
                     } else {
-                        钮.textContent = `生成提示词中 ${已收批}/${总批} 批…`;
+                        本批.forEach(s => 完成目标.add(String(s.segment_id)));
+                        if (!停止中) 钮.title = `点击停止生成 · 已处理 ${完成目标.size}/${目标集.size} 段`;
                     }
                 } else if (名 === "fatal") {
-                    致命 = (落地过 ? `已有 ${已收批} 批结果保留。` : "") + (数据?.error || "提示词生成失败");
+                    const 类 = 数据?.category;
+                    const 建议 = ["network", "deadline", "server", "rate_limited", "busy"].includes(类) ? "连接或服务未完成；未完成段保留原文，请检查连接后再次生成。" : 类 === "auth" || 类 === "config" ? "请检查时间轴模型配置及凭据。" : 类 === "parse" ? "模型响应格式无效；本段保留原文，请再次生成。" : "";
+                    致命 = (落地过 ? `已有 ${完成目标.size} 段结果保留。` : "") + (数据?.error || "提示词生成失败") + (建议 ? `\n${建议}` : "") + (数据?.requestId ? `\n请求编号：${数据.requestId}` : "");
+                } else if (名 === "done") {
+                    结束事件 = 数据;
                 }
-                // done 前端不消费：批级 promptStatus 已在 batch 事件内落盘并回显，done 仅收尾。
+                // 已写回批次保留；结束事件与目标覆盖共同确认完整结束。
                 if (致命) reader.cancel().catch(() => {});
             };
             const 解码器 = new TextDecoder();
@@ -823,6 +905,7 @@ export function 创建剪辑时间轴(容器, ctx) {
             while (!致命) {
                 const { done, value } = await reader.read();
                 if (done) break;
+                更新等待期限();
                 缓存 += 解码器.decode(value, { stream: true });
                 let 界;
                 while ((界 = 缓存.indexOf("\n\n")) >= 0 && !致命) {
@@ -830,29 +913,82 @@ export function 创建剪辑时间轴(容器, ctx) {
                     缓存 = 缓存.slice(界 + 2);
                 }
             }
+            if (超时原因) throw new Error(超时原因);
             if (致命) throw new Error(致命);
+            if (用户停止) throw new Error("已停止本次生成");
+            if (!结束事件 || 完成目标.size !== 目标集.size || 结束事件.stopped) throw new Error(`任务未完整结束：已处理 ${完成目标.size} 段，剩余 ${目标集.size - 完成目标.size} 段未处理；已有结果保留，请处理剩余段。`);
             if (!已收批) throw new Error("流式响应未包含任何批次，未修改草稿，请重试");
             // fix18a4：提示词已写回草稿，重发「剪辑选中段」订阅 → 状态栏面板.回填规划页() 按新草稿
-            //   active 段回填右列（标题/字幕/提示词），否则右列仍显示生成前的旧 prompt。
+            //   active 段回填右列（标题/台词/提示词），否则右列仍显示生成前的旧 prompt。
             //   与「生成规划」重置为 0 不同：此处保持当前 active 不变（用户可能正查看某一段）；
             //   状态桥.设 无同值短路，重发即可触发回填。
             状态.设("剪辑选中段", active());
             if (降级数) await 弹确认("部分提示词未更新",
-                `${降级数} 段未能生成新提示词（上游输出缺失/空或所在批失败），已保留原画面草稿，可重试或手动补写。`);
+                `${降级数} 段生成失败，已保留原文。${生成问题.length ? "\n" + 生成问题.join("\n") : ""}`);
         } catch (e) {
-            await 弹确认("AI生成提示词失败", e.message || "生成失败");
+            await 弹确认(用户停止 ? "已停止本次生成" : "AI生成提示词失败", 用户停止 ? `已处理 ${完成目标.size} 段，剩余 ${目标集.size - 完成目标.size} 段未处理，已有结果及原稿保留。` : 超时原因
+                ? (落地过 ? `已有 ${已收批} 段结果保留。` : "未完成的提示词未写入。") + 超时原因
+                : e.message || "生成失败");
         } finally {
-            忙 = false; 根.classList.remove("忙");   // I1
+            clearTimeout(等待计时); clearTimeout(整单计时);
+            停止生成 = null; 停止中 = false;
             状态.设("LLM请求在途", false);   // B3：无论成功/失败/中断都放行其他 AI 入口
+            忙 = false; 根.classList.remove("忙");
             钮.replaceChildren(...原内容);
             渲染();   // 按当前草稿重算按钮，不能把空草稿或已删除节点的按钮强行解锁
         }
     }
+    function 切换编辑历史(前进 = false) {
+        if (操作忙()) return;
+        const n = 取节点(), 取记录 = 前进 ? 取下次编辑 : 取上次编辑;
+        const 当前历史 = 前进 ? "草稿前进历史" : "草稿编辑历史";
+        const 返回历史 = 前进 ? "草稿编辑历史" : "草稿前进历史";
+        const 操作名 = 前进 ? "下一步" : "上一步";
+        if (!n || !取记录(n)) return;
+        const 快照 = 捕获节点快照(n);
+        const 令牌 = 开始操作(状态, 操作名);
+        if (!令牌) return;
+        let 恢复规划表单 = false;
+        收平移?.();
+        try {
+            if (!提交节点快照(快照, 取节点(), target => {
+                const entry = 取记录(target);
+                if (!entry) throw new Error(`暂无可${前进 ? "返回" : "撤销"}的编辑`);
+                const previous = entry.草稿, cached = entry.分集编辑;
+                const current = 真源.读剪辑草稿(target);
+                恢复规划表单 = JSON.stringify(current.brief) !== JSON.stringify(previous.brief)
+                    || JSON.stringify(current.规划资料) !== JSON.stringify(previous.规划资料);
+                保存编辑记录(target, 返回历史);
+                真源.写剪辑草稿(target, previous, { 记录历史: false });
+                target.properties[当前历史] = target.properties[当前历史].slice(0, -1);
+                const meta = previous.规划资料;
+                if (meta?.任务引用?.id && meta.任务引用.token) {
+                    target.properties.规划成果任务 = { ...meta.任务引用, stages: meta.阶段成果 || [], status: "completed" };
+                } else delete target.properties.规划成果任务;
+                delete target.properties.规划任务缓存;
+                if (cached?.项目 === meta?.项目 && cached?.分集) {
+                    target.properties.规划分集编辑 = JSON.parse(JSON.stringify(cached));
+                } else delete target.properties.规划分集编辑;
+            })) throw new Error("节点或草稿已变化，未覆盖当前内容，请重试");
+            const i = Math.max(0, Math.min(active(), (读草稿().segments || []).length - 1));
+            台词撤销 = null; 选择集 = new Set([i]); 播放头 = Math.min(播放头, 读草稿().segments?.at(-1)?.end || 0); 设active(i);
+            if (恢复规划表单) ctx.恢复规划界面?.();
+            ctx.回填当前段?.();
+        } catch (e) {
+            if (取节点() === n) void 弹确认(`${操作名}未完成`, e.message);
+        } finally {
+            结束操作(状态, 令牌); 渲染();
+        }
+    }
+
     async function 台词估时() {
-        if (忙) return;
+        if (操作忙()) return;
         const n = 取节点(), 草 = 读草稿();
         if (!n || !草.segments?.length) return;
         const 快照 = 捕获节点快照(n);
+        const 令牌 = 开始操作(状态, "台词估时");
+        if (!令牌) return;
+        const 原规划时长 = ctx.取规划总时长?.();
         收平移?.();
         忙 = true; 根.classList.add("忙"); 渲染();
         try {
@@ -863,22 +999,33 @@ export function 创建剪辑时间轴(容器, ctx) {
                 return;
             }
             ctx.同步台词总时长?.(新草.brief.总时长);
+            台词撤销 = { 节点: n, 原草稿: 草, 原规划时长, 新值: JSON.stringify(读草稿()) };
             选择集 = new Set([0]); 设active(0);
         } catch (e) {
             await 弹确认("台词估时失败", e.message || "未能完成估时，请重试");
         } finally {
+            结束操作(状态, 令牌);
             忙 = false; 根.classList.remove("忙"); 渲染();
             if (取节点() === n && !b台词.disabled) b台词.focus();
         }
     }
+    function 撤销台词估时() {
+        if (操作忙() || !台词撤销 || 取节点() !== 台词撤销.节点 || JSON.stringify(读草稿()) !== 台词撤销.新值) return;
+        const 原 = 台词撤销;
+        保存编辑记录(原.节点, "草稿前进历史");
+        真源.写剪辑草稿(原.节点, 原.原草稿, { 记录历史: false });
+        原.节点.properties.草稿编辑历史 = (原.节点.properties.草稿编辑历史 || []).slice(0, -1);
+        if (Number.isFinite(原.原规划时长)) ctx.同步台词总时长?.(原.原规划时长);
+        台词撤销 = null; 选择集 = new Set([0]); 设active(0); 渲染();
+    }
     async function 填充节点() {
-        if (忙) return;
+        if (操作忙()) return;
         const g = 段组();
         if (!g.length) { await 弹确认("无草稿段", "草稿为空，无可填充内容。"); return; }
         // 非全启用 → 仅填充启用段并按 ripple 闭拢时间（同手动删除未启用段的落点）；
         //   全启用（含旧草稿无 启用 字段）→ 原样填充全部段，效果与旧版逐字节一致。
         const 启用组 = g.filter(是启用);
-        if (!启用组.length) { await 弹确认("无启用段", "所有段均未启用，请先「启用」或「全部启用」至少一段。"); return; }
+        if (!启用组.length) { await 弹确认("无启用段", "所有段均未启用，请选中需要的段后点击「启用」，或先「全选」再点击「启用」。"); return; }
         const 待填 = JSON.parse(JSON.stringify(启用组));   // 先深拷再改 start/end，绝不回写草稿真源
         if (启用组.length !== g.length) 重排时间(待填);
         收平移?.();
@@ -890,22 +1037,6 @@ export function 创建剪辑时间轴(容器, ctx) {
             忙 = false; 根.classList.remove("忙");
             渲染();
         }
-    }
-
-    // 生成行 技能/辅助 枚举＝MiniMax-H3知识库（m.风格技能/m.辅助风格）；brief 区「技能」2026-09-18 起已分家改根目录 Skills/（m.brief技能），两者不再同源
-    function 填枚举(meta) {
-        const 填 = (el, 选项, 默认) => { if (!el) return; const 旧 = el.value; el.innerHTML = "";
-            (选项 || []).forEach((o) => { const op = document.createElement("option"); const v = typeof o === "object" ? o.名 || o : o; op.value = v; op.textContent = v; el.appendChild(op); });
-            el.value = 旧 != null && [...el.options].some((o) => o.value === 旧) ? 旧 : (默认 ?? el.options[0]?.value ?? ""); };
-        填(技能sel, meta.风格技能, "通用H3提示词写作");
-        填(辅助sel, meta.辅助风格, "无");
-    }
-    function 填模型(models, cfg) {
-        if (!模型sel) return;
-        const 旧 = 模型sel.value; 模型sel.innerHTML = "";
-        (models || []).forEach((m) => { const o = document.createElement("option"); o.value = m.id; o.textContent = m.has_key ? m.name : `${m.name}（未配置Key）`; 模型sel.appendChild(o); });
-        const 命中 = (models || []).find((m) => m.base_url === cfg?.base_url && m.model === cfg?.model);
-        模型sel.value = (models || []).some((m) => m.id === 旧) ? 旧 : (命中 ? 命中.id : (models?.[0]?.id || ""));
     }
 
     function 建卡(s, i) {
@@ -924,11 +1055,21 @@ export function 创建剪辑时间轴(容器, ctx) {
         // 职能块（2026-09-18 契约键改名）：内容是 钩子/递进/高潮… 叙事职能而非人物角色；数据键与 UI 文案统一为「职能」
         if (s.职能) { const 角 = document.createElement("span"); 角.className = "lvp-ct-角色"; 角.textContent = s.职能; 角.title = s.职能; 头.appendChild(角); }
         头.appendChild(区); 卡.appendChild(头);
-        // 详情直接上卡（标题/职能/字幕/提示词）：取消下方摘要条与素材图后，段卡即信息载体（条件渲染，无则不建元素；窄卡按容器查询逐级隐藏）。
+        // 详情直接上卡（标题/职能/台词/提示词）：取消下方摘要条与素材图后，段卡即信息载体（条件渲染，无则不建元素；窄卡按容器查询逐级隐藏）。
         if (s.标题) { const 题 = document.createElement("div"); 题.className = "lvp-ct-标题"; 题.textContent = s.标题; 题.title = s.标题; 卡.appendChild(题); }
         if (Array.isArray(s.使用素材) && s.使用素材.length) { const 素 = document.createElement("div"); 素.className = "lvp-ct-素材"; 素.textContent = "🎞 " + s.使用素材.join("、"); 素.title = "本段分配素材：" + s.使用素材.join("、"); 卡.appendChild(素); }
-        if (s.字幕) { const 幕 = document.createElement("div"); 幕.className = "lvp-ct-字幕"; 幕.textContent = s.字幕; 幕.title = s.字幕; 卡.appendChild(幕); }
+        if (s.台词) { const 文 = document.createElement("div"); 文.className = "lvp-ct-对白"; 文.textContent = s.台词; 文.title = s.台词; 卡.appendChild(文); }
+        if (取台词文本(s).trim()) {
+            const 估 = document.createElement("div"); 估.className = "lvp-ct-台词";
+            try {
+                const x = 台词估时详情(s, { ...默认台词设置, ...读草稿().台词设置 });
+                估.textContent = "台词约" + x.秒数.toFixed(1) + "秒 · " + (x.偏紧 ? "偏紧" : "可容纳") + (s.台词拆段待核查 ? " · 核查画面" : "");
+                估.title = 取台词文本(s) + "\n" + x.来源 + "；慢／正常／快：" + [x.慢, x.正常, x.快].map(n => n.toFixed(1)).join(" / ") + "秒";
+            } catch (e) { 估.textContent = e.message; }
+            卡.appendChild(估);
+        }
         const 词 = document.createElement("div"); 词.className = "lvp-ct-词"; 词.textContent = (s.prompt || "").trim() || "（未填提示词）"; 卡.appendChild(词);
+        刷段卡验收(卡, s);
         if (i > 0) { const h = document.createElement("div"); h.className = "lvp-ct-把手 左"; h.addEventListener("pointerdown", (e) => 起trim(e, i, "左")); 卡.appendChild(h); }
         const hr = document.createElement("div"); hr.className = "lvp-ct-把手 右"; hr.addEventListener("pointerdown", (e) => 起trim(e, i, "右")); 卡.appendChild(hr);
         卡.addEventListener("pointerdown", (e) => 起卡(e, i));
@@ -957,40 +1098,63 @@ export function 创建剪辑时间轴(容器, ctx) {
         // 新建不受「有无段」限制：只要绑定了节点，空草稿也能建第一段（此为本功能核心）；未绑定/忙时禁用，避免「可点却无效」的死按钮。
         const b新建 = 建钮("➕ 新建", "", "在末尾添加一个空白分段，可直接手动编辑（无需先生成规划）", 新建);
         const b分割 = 建钮("✂ 分割", "", "在播放头处把当前段一分为二", 分割);
+        const b全选 = 建钮("全选", "", "选中全部分段，可批量删除或切换启用状态", 全选);
         const b删除 = 建钮("🗑 删除", "危", "删除选中段（多选批量），其余段 ripple 闭拢", 删除);
         const b启用 = 建钮("启用", "", "切换选中段（或多选）是否参与 AI 生成提示词", 切启用);
-        const b全启 = 建钮("全部启用", "", "所有段都参与 AI 生成提示词", () => 设全启用(true));
-        const b全不启 = 建钮("全不启用", "", "所有段都不参与 AI 生成提示词（保持原 prompt）", () => 设全启用(false));
+        const b上一步 = 建钮("上一步", "", "后退一步，撤销最近一次内容操作；一次AI生成算一步，最多保留20步", () => 切换编辑历史());
+        b上一步.disabled = 操作忙() || !节点 || !取上次编辑(节点);
+        if (!取上次编辑(节点)) b上一步.title = "暂无可撤销的编辑";
+        const b下一步 = 建钮("下一步", "", "返回后退前的内容；进行新的内容修改后，前进记录清空", () => 切换编辑历史(true));
+        b下一步.disabled = 操作忙() || !节点 || !取下次编辑(节点);
+        if (!取下次编辑(节点)) b下一步.title = "暂无可返回的编辑";
         // 禁用字幕开关（2026-09-28，规格 §6）：真源＝剪辑草稿顶层 禁用字幕，故每次 渲染() 现读、不自设闭包缓存
         //   （与节点时间轴「渐变过渡」开关同范式）——拆分/删除/启用切换/台词估时等任何写草稿路径都不会与 UI 失同步。
-        //   只作用于「✨ AI 生成提示词」：字幕照旧参与台词估时、照旧显示在段卡与右列。
+        //   只作用于「✨ AI 生成提示词」的画面文字；台词照常朗读和估时。
         const 字幕开关 = document.createElement("label"); 字幕开关.className = "lvp-ct-开关";
         const 字幕框 = document.createElement("input");
         字幕框.type = "checkbox"; 字幕框.className = "lvp-ct-开关框";
         字幕框.checked = 读草稿().禁用字幕 === true;
-        字幕框.disabled = 忙 || !节点 || !有段;         // 生成期间不得改，避免与在途请求的 body 语义不一致；零段时与「台词估时」同口径禁用（勾了无处生效，且只含开关的空草稿会被计划存档判成「缺草稿」而在加载时丢掉）
+        字幕框.disabled = 操作忙() || !节点 || !有段;         // 生成期间不得改，避免与在途请求的 body 语义不一致；零段时与「台词估时」同口径禁用（勾了无处生效，且只含开关的空草稿会被计划存档判成「缺草稿」而在加载时丢掉）
         字幕框.onchange = () => {
             // 忙期 checkbox 未被程序禁用（禁用只在 渲染() 设，而 生成提示词() 进 忙 时不重渲染）；
             //   CSS `.lvp-ct.忙 .lvp-ct-开关{pointer-events:none}`（pointer-events 可继承，连内部 input 一起挡）
             //   挡得住鼠标、挡不住 Tab+Space，故在入口拒绝并回退真源。
-            if (忙) { 字幕框.checked = 读草稿().禁用字幕 === true; return; }
+            if (操作忙()) { 字幕框.checked = 读草稿().禁用字幕 === true; return; }
             写草稿(段组(), { 禁用字幕: 字幕框.checked });
         };
-        字幕开关.title = "禁用字幕：开启后「AI 生成提示词」不上传字幕数据，系统指令改为要求画面不得出现任何屏上文字；字幕仍可用于「台词估时」与段卡显示（存进本节点剪辑草稿顶层「禁用字幕」）";
+        字幕开关.title = "禁止生成画面出现字幕、标题字等屏上文字；台词与旁白仍正常朗读，不影响台词估时。后期字幕请在「视频制作」页设置。";
         字幕开关.append(字幕框, "禁用字幕");
         if (字幕框.disabled) 字幕开关.classList.add("关禁");
-        b台词 = 建钮("台词估时", "", "选择作为台词的字幕，按语速预览段长与拆分结果，确认后只更新草稿", 台词估时);
-        b台词.disabled = 忙 || !节点 || !有段;
-        b新建.disabled = 忙 || !节点;   // 节点 已在 渲染() 头部取好（取节点()）；与空草稿常显面板（Item1）配合：有节点即可建首段
-        b分割.disabled = b删除.disabled = b启用.disabled = b全启.disabled = b全不启.disabled = 忙 || !有段;
+        b台词 = 建钮("台词估时", "", "按语速检查台词／旁白，预览段长与拆分结果，确认后只更新草稿", 台词估时);
+        b台词.disabled = 操作忙() || !节点 || !有段;
+        b新建.disabled = 操作忙() || !节点;   // 节点 已在 渲染() 头部取好（取节点()）；与空草稿常显面板（Item1）配合：有节点即可建首段
+        b分割.disabled = b全选.disabled = b删除.disabled = b启用.disabled = 操作忙() || !有段;
         概要El = document.createElement("span"); 概要El.className = "lvp-ct-概要";
-        工具.append(b新建, b分割, b删除, b启用, b全启, b全不启, 字幕开关, b台词);
+        工具.append(b新建, b分割, b全选, b删除, b启用, b上一步, b下一步, 字幕开关, b台词);
+        if (台词撤销?.节点 === 节点) {
+            const 撤 = 建钮("撤销估时", "", "恢复最近一次台词调整；后续编辑后不可撤销，避免覆盖新内容", 撤销台词估时);
+            撤.disabled = 操作忙() || JSON.stringify(读草稿()) !== 台词撤销.新值;
+            工具.appendChild(撤);
+        }
         根.appendChild(工具);
 
-        // 生成行（技能/辅助/模型 + AI生成提示词 + 填充节点）：持久元素，只建一次（C1）
+        // 生成行（AI生成提示词 + 填充节点）：持久元素，只建一次（C1）；模型在配置页管理。
         const 撑El = document.createElement("div"); 撑El.className = "lvp-ct-撑";
         工具.append(建生成行(), 撑El, 建缩放控件(), 概要El);
-        b提示.disabled = b填充.disabled = 忙 || !有段;
+        b填充.disabled = 操作忙() || !有段;
+        b提示.disabled = 停止生成 ? 停止中 : 操作忙() || !有段;
+        if (!停止生成) b提示.title = "对每个启用段一次直接生成提示词，完成即回写";
+        if (有段 && 节点) {
+            const 应用态 = document.createElement("div"); 应用态.className = "lvp-ct-应用状态"; 应用态.setAttribute("aria-live", "polite");
+            const 执行段 = 真源.读时间轴(节点).segments || [];
+            const 待填 = JSON.parse(JSON.stringify(g.filter(是启用)));
+            if (待填.length !== g.length) 重排时间(待填);
+            const 排键 = 值 => Array.isArray(值) ? 值.map(排键) : 值 && typeof 值 === "object" ? Object.fromEntries(Object.keys(值).sort().map(k => [k, 排键(值[k])])) : 值;
+            const 内容签名 = 组 => JSON.stringify(组.map(s => [s.segment_id, s.start, s.end, s.prompt, s.task || "t2v", s.i2v比例模式 || "裁剪", 排键(s.refs || {})]));
+            const 预期 = ctx.取填充段?.(待填, 读草稿()) || 待填;
+            应用态.textContent = 内容签名(预期) === 内容签名(执行段) ? "当前草稿已填充节点" : "草稿尚未填充节点 · 修改仅保存在草稿，确认后点「填充节点」";
+            根.appendChild(应用态);
+        }
 
         // 卷 → 内（时间线 + 轨道 + 播放头 + 插入线）
         const 卷 = document.createElement("div"); 卷.className = "lvp-ct-卷";
@@ -1034,9 +1198,11 @@ export function 创建剪辑时间轴(容器, ctx) {
     // 容器宽变化（面板拉伸/折叠/窗口 resize）→ 像素/秒 变 → 时间线刻度步长重算（秒↔分钟）
     if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => 排时间线()).observe(根);
     return {
-        渲染, 刷active, 填枚举, 填模型,
-        取技能: () => 技能sel?.value || "不指定",
-        取辅助: () => 辅助sel?.value || "无",
-        取模型id: () => 模型sel?.value || "",
+        渲染, 刷active,
+        取忙: () => 忙,
+        重置视图: () => {
+            收平移?.(); 缩放 = 1; 播放头 = 0; 视图起点 = 0;
+            选择集 = new Set(); 拖 = null; 台词撤销 = null; 渲染();
+        },
     };
 }

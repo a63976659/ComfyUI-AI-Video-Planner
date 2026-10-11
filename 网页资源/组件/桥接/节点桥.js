@@ -2,6 +2,7 @@
 // 🔒 剪辑草稿 真源＝node.properties.剪辑草稿（非 widget）：properties 随工作流序列化保存，
 //   但**不进入 prompt / 执行缓存签名**——编辑草稿不会作废 ComfyUI 节点缓存、不触发重执行。
 //   schema 中仍保留同名 widget（恒为默认值、幽灵化），仅作旧工作流迁移载体与向后兼容占位。
+import { 清理草稿台词模板 } from "../台词提示词清理.js";
 
 export function 取widget(node, 名) {
     return (node?.widgets || []).find((w) => w.name === 名);
@@ -27,6 +28,27 @@ const 写入版本 = new WeakMap();
 const 节点代数 = new WeakMap();
 // 剪辑草稿 迁至 node.properties 后的写入版本追踪（ABA 守卫，与 widget 写入版本同理）。
 const 属性版本 = new WeakMap();   // node → Map<名, version>
+const 编辑分组 = new WeakMap();
+
+function 取编辑记录(node, 字段) {
+    const history = node?.properties?.[字段];
+    const entry = Array.isArray(history) ? history.at(-1) : null;
+    return entry?.草稿 && Array.isArray(entry.草稿.segments) ? entry : null;
+}
+export function 取上次编辑(node) { return 取编辑记录(node, "草稿编辑历史"); }
+export function 取下次编辑(node) { return 取编辑记录(node, "草稿前进历史"); }
+
+export function 保存编辑记录(node, 字段 = "草稿编辑历史") {
+    const props = node.properties ||= {};
+    const history = Array.isArray(props[字段]) ? [...props[字段]] : [];
+    const entry = { 草稿: 真源.读剪辑草稿(node) };
+    if (props.规划分集编辑) entry.分集编辑 = JSON.parse(JSON.stringify(props.规划分集编辑));
+    history.push(entry);
+    // 每个方向保留最近20步；大草稿至少保留最后一步，旧记录先淘汰。
+    let kept = history.slice(-20);
+    while (kept.length > 1 && JSON.stringify(kept).length > 5000000) kept.shift();
+    props[字段] = kept;
+}
 
 function 属性版本号(node, 名) {
     return 属性版本.get(node)?.get(名) || 0;
@@ -109,7 +131,7 @@ export const 真源 = {
     写输出分辨率: (n, v) => 写值(n, "输出分辨率", v),
     读百万像素: (n) => 取widget(n, "百万像素")?.value,
     写百万像素: (n, v) => 写值(n, "百万像素", v),
-    // 缓存失效版本：普通可见数值 widget（非 hidden），换模型/换权重后手动 +1 整体作废段缓存（§B-2）。
+    // 缓存失效版本：隐藏数值 widget，经时间轴缓存工具条编辑，换模型/换权重后手动 +1 整体作废段缓存（§B-2）。
     //   读归一为非负整数（widget 值可能是字符串/undefined → 0），与后端 execute 的 int 归一同口径。
     读缓存失效版本: (n) => { const v = Number(取widget(n, "缓存失效版本")?.value); return Number.isFinite(v) && v > 0 ? Math.trunc(v) : 0; },
     写缓存失效版本: (n, v) => { const i = Math.trunc(Number(v)); return 写值(n, "缓存失效版本", Number.isFinite(i) && i > 0 ? i : 0); },
@@ -119,14 +141,24 @@ export const 真源 = {
         const raw = n?.properties?.剪辑草稿;
         try {
             const v = JSON.parse(raw ?? "null");
-            return v ?? { brief: {}, segments: [] };
+            return 清理草稿台词模板(v ?? { brief: {}, segments: [] });
         } catch {
             return { brief: {}, segments: [] };
         }
     },
-    写剪辑草稿: (n, v) => {
+    写剪辑草稿: (n, v, { 记录历史 = true, 编辑批次 = null } = {}) => {
         if (!n) return false;
-        (n.properties ||= {}).剪辑草稿 = JSON.stringify(v);
+        const props = n.properties ||= {};
+        const next = JSON.stringify(清理草稿台词模板(v));
+        const old = props.剪辑草稿;
+        const group = 编辑分组.get(n);
+        if (记录历史 && next !== old && !(编辑批次 && group?.批次 === 编辑批次 && group.当前 === old)) {
+            保存编辑记录(n);
+        }
+        if (记录历史 && next !== old) delete props.草稿前进历史;
+        props.剪辑草稿 = next;
+        if (记录历史 && 编辑批次) 编辑分组.set(n, { 批次: 编辑批次, 当前: next });
+        else 编辑分组.delete(n);
         递增属性版本(n, "剪辑草稿");
         标脏(n);
         return true;
@@ -145,13 +177,16 @@ function 素材名列表(值) {
 // 编辑候选不传共用素材，避免把其他段的共用池当作本段可编辑列表。
 export function 解析段素材(refs, 全局素材, 共用素材 = null) {
     const 合并 = 共用素材 === null ? { ...全局素材, ...refs } : { ...refs, ...共用素材 };
-    return { 图片: 素材名列表(合并.图片), 音频: 素材名列表(合并.音频), 视频: 素材名列表(合并.视频) };
+    if (共用素材 !== null && 共用素材.视频音频模式 === undefined) delete 合并.视频音频模式;
+    return { 图片: 素材名列表(合并.图片), 音频: 素材名列表(合并.音频), 视频: 素材名列表(合并.视频),
+        ...(合并.视频音频模式 !== undefined ? { 视频音频模式: 合并.视频音频模式 } : {}) };
 }
 
 // 对齐 _查找共用素材：首个段级共用优先，缺槽为空；否则按全局开关取全局字典（缺键不补）。
 export function 查找共用素材(段组, 全局素材, 全局共用) {
     const refs = 段组.find(s => s?.refs?.共用)?.refs;
-    if (refs) return { 图片: refs.图片 || [], 音频: refs.音频 || [], 视频: refs.视频 || [] };
+    if (refs) return { 图片: refs.图片 || [], 音频: refs.音频 || [], 视频: refs.视频 || [],
+        ...(refs.视频音频模式 !== undefined ? { 视频音频模式: refs.视频音频模式 } : {}) };
     return 全局共用 ? (全局素材 || {}) : null;
 }
 

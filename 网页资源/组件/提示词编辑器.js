@@ -11,22 +11,50 @@ const 标签到中文 = { Picture: "图像", Audio: "音频", Video: "视频" };
 // 标签英文名（小写）→ 素材池中文键，与后端 执行/参考素材.py `_标签到槽` 同源；审查悬空标签 据此查对应素材数。
 const 标签到槽 = { picture: "图片", audio: "音频", video: "视频" };
 
+export async function 读取参考标签(素材) {
+    if (!(素材.视频 || []).length) return 素材;
+    const res = await fetch("/lvp/media/reference_labels", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(素材),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || "参考视频音轨读取失败");
+    return data;
+}
+
 // 装饰标签：LLM 生成的分镜/规划提示词里常见的段落小标题（如 `subject_definitions:`、`[Shot 1]`），
 // 只是**视觉分组标记**，不引用任何素材、后端也不解析——前端在 设值() 时把它们渲染成
 // 与 <Picture N> 同形态但配色的 chip，仅便于阅读；dataset.tag 仍存原始英文，取纯文本() 原样吐出，
 // 后端与 计划数据 保存/加载 全链路无感。`[Shot N]` 里的 N 是任意正整数（不同分镜数量都要能对上）。
-// 🔒 单一真源：8 个模式只在 `装饰模式` 字符串里硬编码一次，单装饰re / 全标签re 均由它派生——
+// 🔒 单一真源：各模式只在 `装饰模式` 字符串里硬编码一次，单装饰re / 全标签re 均由它派生——
 //   未来增删装饰标签只需改 `装饰模式` + `装饰到中文` 两处，避免两个正则漂移导致 chip 化静默失效。
-const 装饰模式 = String.raw`subject_definitions:|summary:|retention_analysis:|detailed_description:|overall_soundscape:|non_diegetic_music:|\[reference generation\]|\[Shot\s*\d+\]`;
+const 任务类型到中文 = {
+    "keyframe completion": "关键帧补全",
+    "reference generation": "参考生成",
+    "video editing": "视频剪辑",
+    "video continuation": "视频续写",
+    "audio reuse": "音频复用",
+    "audio reference": "音频参考",
+};
+const 任务类型模式 = Object.keys(任务类型到中文).map(类型 => 类型.replace(/ /g, String.raw`\s+`)).join("|");
+const 任务前缀模式 = String.raw`\[\s*(?:${任务类型模式})(?:\s*\+\s*(?:${任务类型模式}))*\s*\]`;
+const 单任务前缀re = new RegExp(`^(?:${任务前缀模式})$`, "i");
+const 装饰模式 = String.raw`subject_definitions:|summary:|retention_analysis:|detailed_description:|integrated_multimodal_description:|overall_soundscape:|non_diegetic_music:|${任务前缀模式}|\[Shot\s*\d+\]|<Subject\s*\d+>|\b(?:fully_preserved|partially_preserved|attribute_transfer|weak_reference|fully_copy|partially_copy|reference)\b`;
 const 单装饰re = new RegExp(`^(?:${装饰模式})$`, "i");
 const 装饰到中文 = {
     "subject_definitions:": "主体定义:",
     "summary:": "摘要:",
     "retention_analysis:": "留存分析:",
     "detailed_description:": "详细描述:",
+    "integrated_multimodal_description:": "综合多模态描述:",
     "overall_soundscape:": "整体音景:",
     "non_diegetic_music:": "非叙事音乐:",
-    "[reference generation]": "[参考生成]",
+    "fully_preserved": "完全保留",
+    "partially_preserved": "部分保留",
+    "attribute_transfer": "特征迁移",
+    "weak_reference": "弱参考",
+    "fully_copy": "完整复制",
+    "partially_copy": "部分复制",
+    "reference": "参考",
 };
 // 引用 chip + 装饰 chip 合并匹配：设值() 一次扫描按位置交替插入文本节点/两类 chip，避免二次遍历互相踩。
 const 全标签re = new RegExp(`<(?:Picture|Audio|Video)\\s*\\d+>|(?:${装饰模式})`, "gi");
@@ -60,13 +88,19 @@ function 显示名(标签) {
     if (!标签) return "";
     const 小 = 标签.toLowerCase();
     if (装饰到中文[小]) return 装饰到中文[小];
+    if (单任务前缀re.test(标签)) {
+        const 类型 = 标签.slice(1, -1).split("+").map(项 => 任务类型到中文[项.trim().replace(/\s+/g, " ").toLowerCase()]);
+        return `[${类型.join(" + ")}]`;
+    }
     const shotM = /^\[shot\s*(\d+)\]$/i.exec(标签);
     if (shotM) return `[镜头 ${shotM[1]}]`;
+    const subjectM = /^<subject\s*(\d+)>$/i.exec(标签);
+    if (subjectM) return `主体${subjectM[1]}`;
     const m = 单标签re.exec(标签);
     return m ? `${标签到中文[m[1]]}${m[2]}` : (标签 || "").replace(/[<>]/g, "");
 }
 
-export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分辨率变更, 百万像素变更, 全局提示词变更, 取节点, 计划已加载, 取规划编辑状态, 应用规划, 取在途 }) {
+export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分辨率变更, 百万像素变更, 全局提示词变更, 取节点, 计划已加载, 取规划编辑状态, 应用规划, 取在途, 状态, 外置审查 = false }) {
     const 盒 = document.createElement("div");
     盒.className = "lvp-提示词";
     const 编辑区 = document.createElement("div");
@@ -88,14 +122,14 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     };
     工具行.appendChild(at按钮);
 
-    // 「审查标签」按钮（@ 右侧）：一键审查没有对应上传素材的悬空标签（如 <Video 1> 但未传视频），
+    // 「审查标签」：编辑页面板将入口放在参考区，独立编辑器保留工具行入口。
     // 二次确认后降级为纯文字 [Video 1]，破坏后端 提取标签 的保留 token 格式，使生成时不再被当引用、不报错。
     const 审查按钮 = document.createElement("button");
     审查按钮.className = "lvp-胶囊"; 审查按钮.type = "button";
     审查按钮.textContent = "审查标签";
     审查按钮.title = "一键审查：找出没有对应上传素材的悬空标签（如 <Video 1> 但未传视频），二次确认后降级为文字 [Video 1]，避免生成时报错";
     审查按钮.onclick = 审查悬空标签;
-    工具行.appendChild(审查按钮);
+    if (!外置审查) 工具行.appendChild(审查按钮);
 
     // @ 按钮后：输出分辨率下拉 + 百万像素数值（与参考节点前端同款，编辑节点同名 widget）
     const 控件样式 = "background:var(--comfy-input-bg,#1c1c1c);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);border-radius:3px";
@@ -139,7 +173,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     // 在节点上已隐藏）。工具行因此有 6 组控件，窄屏靠 .lvp-工具行 的横向滚动兜住（不换行、不吞高度）。
     const 画风预设 = 创建画风预设选择(工具行, { 变更: 全局提示词变更 });
 
-    const 计划 = 创建计划数据(工具行, { 取节点, 计划已加载, 取规划编辑状态, 取在途 });
+    const 计划 = 创建计划数据(工具行, { 取节点, 计划已加载, 取规划编辑状态, 取在途, 状态 });
 
     // 编辑说明行：介绍 @ 用法等编辑方法
     const 说明行 = document.createElement("div");
@@ -184,6 +218,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     }
 
     function 设值(文本) {
+        关弹层();
         编辑区.innerHTML = "";
         const s = 文本 || "";
         let 末 = 0;
@@ -197,15 +232,21 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
         if (末 < s.length) 编辑区.appendChild(document.createTextNode(s.slice(末)));
     }
 
+    let 标签请求序号 = 0;
     function 关弹层() {
+        标签请求序号++;
         弹层?.remove();
         弹层 = null;
         if (外点) { document.removeEventListener("mousedown", 外点, true); 外点 = null; }
     }
 
-    function 弹参考列表(锚rect) {
+    async function 弹参考列表(锚rect) {
         关弹层();
-        const 素材 = 取参考List_安全();
+        const 序号 = 标签请求序号, 快照 = JSON.stringify(取参考List_安全());
+        let 素材;
+        try { 素材 = JSON.parse(快照); if (素材.视频?.length) 素材 = await 读取参考标签(素材); }
+        catch (e) { if (序号 === 标签请求序号) toast(e.message); return; }
+        if (序号 !== 标签请求序号 || 快照 !== JSON.stringify(取参考List_安全())) return;
         弹层 = document.createElement("div");
         弹层.className = "lvp-弹层";
         // 先隐藏，挂到 body 后由 定位弹层() 量出真实尺寸并据视口可用空间给出最终 left/top（防底部溢出）
@@ -283,7 +324,12 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     // 引用、不触发 校验标签 报错；有对应素材的标签保持为引用 chip 不动。素材池与 @ 弹层同源（全局池）。
     // 降级前弹二次确认（列出将降级的标签），确认才改写，取消则原样不动。
     async function 审查悬空标签() {
-        const 素材 = 取参考List_安全();
+        const 快照 = JSON.stringify(取参考List_安全()), 原文 = 取纯文本();
+        const 代数 = 标签请求序号;
+        let 素材;
+        try { 素材 = await 读取参考标签(JSON.parse(快照)); }
+        catch (e) { toast(e.message); return; }
+        if (代数 !== 标签请求序号 || 快照 !== JSON.stringify(取参考List_安全()) || 原文 !== 取纯文本()) return;
         const 计数 = {
             图片: (素材.图片 || []).length,
             音频: (素材.音频 || []).length,
@@ -305,6 +351,7 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
             `发现 ${悬空.length} 处悬空标签（无对应上传素材）：${摘要}。` +
             `\n\n将把它们从引用降级为纯文字（如 <Video 1> → [Video 1]），此后不再被当作参考素材。确认降级？`);
         if (!确认) { toast("已取消，未作改动"); return; }
+        if (代数 !== 标签请求序号 || 快照 !== JSON.stringify(取参考List_安全()) || 原文 !== 取纯文本()) return;
         设值(新文);
         变更?.(取纯文本());                                        // 写回当前段 prompt（时间轴 widget）
         toast(`已降级 ${悬空.length} 处悬空标签为文字：${摘要}`);
@@ -363,10 +410,12 @@ export function 创建提示词编辑器(容器, { 变更, 取参考列表, 分�
     }
 
     return {
+        审查标签: 审查悬空标签,
+        重置: () => { 设值(""); 画风预设.设值(""); 计划.重置选择(); },
         设值, 取值: 取纯文本, 设分辨率, 设百万像素,
         设全局提示词: (v) => 画风预设.设值(v),
         刷新画风预设: () => 画风预设.刷新选项(),
         刷新计划列表: () => 计划.刷新列表(),
-        刷新弹层: () => { if (弹层) 弹参考列表(弹层.getBoundingClientRect()); },
+        刷新弹层: () => { if (弹层) 弹参考列表(弹层.getBoundingClientRect()); else 标签请求序号++; },
     };
 }

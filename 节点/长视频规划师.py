@@ -120,15 +120,17 @@ class 长视频规划师(io.ComfyNode):
                 # ⚠️ 不加 extra_dict={"hidden":True}：剪辑草稿 与 时间轴数据 同属「multiline JSON、由 DOM
                 #   组件接管编辑」的 widget，隐藏走 时间轴面板.js 幽灵widget 名单（步骤5）而非 extra_dict。
                 #   若误加 extra_dict hidden，会被 测试_常量同步.py::test_隐藏widget名_前后端同步 计入后端隐藏
-                #   集合（变 6 项），而前端 状态栏入口.js 隐藏widget名 仍 5 项 → 该镜像锁失败。
+                #   集合，而前端 状态栏入口.js 隐藏widget名 未同步 → 该镜像锁失败。
                 io.String.Input("剪辑草稿", multiline=True, default='{"brief":{},"segments":[]}'),
                 # 缓存失效版本 同样置于 inputs 末尾（向后兼容铁律，见 参考共用 注释）：旧存档不含本 widget
                 #   → 载入时拿默认 0（不因子把既有段缓存误作废）。§B-2：模/CLIP/VAE 只在上游 loader 携带
                 #   内容绑定、可复现标识（约定属性 lvp_模型身份，由 执行核心.提取模型链身份 自动纳入指纹）时才会
                 #   自动感知换 ckpt；ComfyUI 自带 loader 不提供此类标识（也不每段扫权重）→ 换型后把本值 +1
-                #   即可整体作废段缓存重采样（可靠兼底）。普通可见数值 widget（非 hidden），无需前端镜像同步。
+                #   即可整体作废段缓存重采样（可靠兼底）。隐藏原数值控件，仅经时间轴缓存工具条编辑；
+                #   widget 仍保留原位置、序列化与 prompt 提交，状态栏入口.js 同步隐藏 canvas 布局路径。
                 io.Int.Input("缓存失效版本", default=0, min=0, max=999999, step=1,
-                             tooltip="换模型/权重后手动 +1 以整体作废段缓存重采样（自动失效需 loader 携带可复现模型标识）；默认 0"),
+                             tooltip="换模型/权重后手动 +1 以整体作废段缓存重采样（自动失效需 loader 携带可复现模型标识）；默认 0",
+                             extra_dict={"hidden": True}),
                 # SelfLift配置 置于 inputs 末尾：io.Custom 的选填输入只渲染成 socket、不产生 widget，
                 #   故不受「新 widget 必须追加末尾」的位置回填约束；放末尾同时让前 20 个输入的顺序与
                 #   名称一字不动。不连接＝None＝单阶段采样（原路径逐字不变）。
@@ -144,7 +146,7 @@ class 长视频规划师(io.ComfyNode):
                 io.String.Output("报告"),
                 io.Custom("LVP_FIRST_PASS").Output("初采产物"),
             ],
-            hidden=[io.Hidden.unique_id],
+            hidden=[io.Hidden.unique_id, io.Hidden.prompt],
         )
 
     @classmethod
@@ -240,4 +242,9 @@ class 长视频规划师(io.ComfyNode):
         fps = float(帧率)
         # IMAGE 为 [T,H,W,C]，帧数在 dim0
         frame_count = int(images.shape[0])
-        return io.NodeOutput(images, audio, fps, frame_count, report, first_pass)
+        try:
+            from ..制作.结果接收 import 交付生成结果
+        except ImportError:
+            from 制作.结果接收 import 交付生成结果
+        ui_data = 交付生成结果(images, audio, fps, first_pass, cls.hidden)
+        return io.NodeOutput(images, audio, fps, frame_count, report, first_pass, ui=ui_data)

@@ -12,6 +12,9 @@
 // 点「保存」POST 全量清单；api_key 掩码：逐条徽章「已配置/未配置」，留空不回传（后端按 id 沿用旧 Key）。
 // 全局请求超时钳制 120~3600（2026-09-17 下限由 30 提为 120：思考模型规划常超 2 分钟，低下限会误伤）；温度/Max Tokens 不入 UI，走后端默认。
 import { app } from "../../../scripts/app.js";
+import { 创建图像模型设置 } from "./图像模型设置.js";
+import { 创建专项能力设置 } from "./专项能力设置.js";
+import { 创建数据管理 } from "./数据管理.js";
 
 const 超时下限 = 120;
 const 超时上限 = 3600;
@@ -32,6 +35,7 @@ const 回落模型 = [
 ];
 
 let 已注册 = false;
+let 用途面板序 = 0;
 let 草稿 = null;      // 模块级草稿：设置对话框关闭重开才会重建面板（切分类复用同一节点，实测宿主 1.41），无条件重载会丢用户未保存的输入
 let 已改 = false;
 let 镜像 = [];   // 模块级模型清单副本：后端未重启（旧响应无 models）时不丢用户已加条目；只存已持久化部分（不含 _new 行）
@@ -133,6 +137,11 @@ function 确保样式() {
            宿主对此层无任何 CSS 规则，知识库亦无函数型 type 满宽约定→必须自己处理 */
         `.${行类} > .form-input > .${包裹层类} { width:100% !important; box-sizing:border-box !important; }`,
         `#${面板ID} .lvp-desc { font-size:12px; line-height:1.7; margin:0; color:var(--p-text-muted-color,#9aa0a8); }`,
+        `#${面板ID} .lvp-purpose-card.lvp-card { gap:8px; }`,
+        `#${面板ID} .lvp-purpose-fields { display:flex; align-items:center; flex-wrap:wrap; gap:10px 24px; min-width:0; }`,
+        `#${面板ID} .lvp-purpose-field { display:flex; align-items:center; gap:8px; min-width:0; max-width:100%; }`,
+        `#${面板ID} .lvp-purpose-field label { flex:0 0 auto; font-size:12px; color:var(--p-text-muted-color,#9aa0a8); }`,
+        `#${面板ID} .lvp-purpose-field select { width:200px; min-width:0; max-width:100%; box-sizing:border-box; flex:0 1 auto; }`,
         `#${面板ID} .lvp-card { background:var(--p-content-background,#161616); border:1px solid var(--p-content-border-color,#2e2e2e); border-radius:10px; padding:14px 16px; display:flex; flex-direction:column; gap:12px; }`,
         `#${面板ID} .lvp-card-h { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }`,
         `#${面板ID} .lvp-card-h b { font-size:13px; font-weight:600; color:var(--p-text-color,#e8e8e8); }`,
@@ -218,10 +227,21 @@ function 渲染配置面板(宿主) {
     const 框 = {};
 
     // —— 开头说明（标题由宿主 FormItem 标签承担，不重复画）——
-    面板.append(el("p", { class: "lvp-desc", text: "配置存于服务器端 规划/规划器配置.json，重启后自动恢复；API Key 按模型各自保存，留空表示不修改，完整 Key 不下发到浏览器。" }));
+    面板.append(el("p", { class: "lvp-desc", text: "配置存于服务器端，重启后自动恢复；API Key 按模型各自保存，留空表示不修改，完整 Key 不下发到浏览器。" }));
 
     // —— 卡片一：模型（统一清单＝预设行+自定义行；单选钮选当前；每行可编辑，编辑/新增行内填 Key，保存后持久化）——
     const 列表盒 = el("div", { class: "lvp-models" });
+    const 用途下拉 = {};
+    function 刷新用途模型() {
+        const 清单 = (草稿?.models || 镜像).filter(m => m.id && !m._new);
+        for (const [key, sel] of Object.entries(用途下拉)) {
+            sel.replaceChildren(el("option", { value: "", text: "沿用当前默认模型" }));
+            for (const m of 清单) sel.append(el("option", { value: m.id, text: m.has_key ? m.name : `${m.name}（未配置Key）` }));
+            const mid = 草稿?.ai_model_selections?.[key] || "";
+            sel.value = 清单.some(m => m.id === mid) ? mid : "";
+            if (草稿?.ai_model_selections) 草稿.ai_model_selections[key] = sel.value;
+        }
+    }
     const 是命中 = (m) => !m._new && m.base_url === 草稿?.base_url && m.model === 草稿?.model;
     const 键徽 = (m) => el("span", { class: m.has_key ? "lvp-badge" : "lvp-badge none", text: m.has_key ? "已配置" : "未配置" });
     const 刷新模型列表 = () => {
@@ -309,12 +329,30 @@ function 渲染配置面板(宿主) {
         if (!清单.some((m) => !m.builtin && !m._new)) 列表盒.append(el("span", { class: "lvp-hint", text: "仅预设模型——点「编辑」填入该模型的 API Key，或在下方「模型清单」添加任意 OpenAI 兼容接口。" }));
         const 命中 = 清单.find(是命中);
         if (!命中 && (草稿?.model || 草稿?.base_url)) 列表盒.append(el("span", { class: "lvp-hint", text: `当前模型未列入清单：${草稿.model || "(空)"} @ ${草稿.base_url || "(空)"}，沿用其已存地址` }));
+        刷新用途模型();
     };
     刷新模型列表();   // 同步先画回落清单，避免异步拉配置前列表空白
     面板.append(el("div", { class: "lvp-card" },
         el("div", { class: "lvp-card-h" }, el("b", { text: "模型" }),
             el("span", { class: "lvp-hint", text: "单选钮选当前模型并写回 Base URL / Model；预设与自定义同样可编辑，API Key 按模型各自保存" })),
         列表盒));
+    const 用途卡 = el("div", { class: "lvp-card lvp-purpose-card" },
+        el("div", { class: "lvp-card-h" }, el("b", { text: "AI 功能模型" })),
+        el("p", { class: "lvp-desc", text: "未单独选择时沿用默认模型；新模型先保存到清单，再选择并保存配置。" }));
+    const 用途字段 = el("div", { class: "lvp-purpose-fields" }); 用途卡.append(用途字段);
+    const 用途ID = `${面板ID}-purpose-${++用途面板序}`;
+    for (const [key, name] of [["planning", "AI规划模型"], ["timeline", "时间轴改写模型"], ["editor", "提示词优化模型"]]) {
+        const sel = el("select", { id: `${用途ID}-${key}`, class: "p-inputtext p-component" }); sel.setAttribute("aria-label", name);
+        sel.onchange = () => {
+            草稿 = 草稿 || {}; 草稿.ai_model_selections = { ...(草稿.ai_model_selections || {}), [key]: sel.value }; 已改 = true;
+        };
+        用途下拉[key] = sel;
+        用途字段.append(el("div", { class: "lvp-purpose-field" }, el("label", { text: name, htmlFor: sel.id }), sel));
+    }
+    面板.append(用途卡); 刷新用途模型();
+    const 图像设置 = 创建图像模型设置({ el, 按钮, 文本框, 小按钮类 });
+    面板.append(图像设置.根);
+    const 专项设置 = 创建专项能力设置({ el, 文本框 });
 
     // —— 卡片二：连接与安全（长期全局内容；Key 已按模型各自保存在上方清单，不在此重复）——
     const 超 = el("input", {
@@ -331,7 +369,7 @@ function 渲染配置面板(宿主) {
     框.timeout = 超;
     const 勾 = 原生开关(true, (v) => { 草稿 = 草稿 || {}; 草稿.verify_ssl = v; 已改 = true; });
     框.ssl设 = 勾._set;
-    // 「模型清单」添加按钮放底部全局区（同参考插件「全局」组）：点击后上方模型列表追加填写行
+    // 模型清单添加按钮与连接设置紧接图像模型配置：点击后上方模型列表追加填写行。
     const 加钮 = 按钮("➕ 添加自定义模型");
     加钮.onclick = () => {
         草稿 = 草稿 || {};
@@ -348,13 +386,16 @@ function 渲染配置面板(宿主) {
         el("div", { class: "lvp-card-h" }, el("b", { text: "连接与安全" }),
             el("span", { class: "lvp-hint", text: "温度 / Max Tokens 使用后端默认值，不在此配置" })),
         el("div", { class: "lvp-row" }, el("label", { text: "全局请求超时(秒)" }),
-            el("div", { class: "lvp-cell" }, 超, el("span", { class: "lvp-hint", text: `${超时下限}~${超时上限}` }))),
+            el("div", { class: "lvp-cell" }, 超, el("span", { class: "lvp-hint", text: `${超时下限}~${超时上限}；单次连接或连续无数据等待，不限制完整规划总时长` }))),
         el("div", { class: "lvp-row" }, el("label", { text: "校验 SSL 证书" }),
             el("div", { class: "lvp-cell" }, 勾,
                 el("span", { class: "lvp-hint", text: "关闭仅对本地自签证书生效；公网 https 强制保持校验" }))),
         el("div", { class: "lvp-row" }, el("label", { text: "模型清单" }),
-            el("div", { class: "lvp-cell" }, 加钮,
-                el("span", { class: "lvp-hint", text: "添加后在上方模型列表填写新行（含 Key），点「保存配置」生效" })))));
+            el("div", { class: "lvp-cell", style: { flexDirection: "column", alignItems: "flex-start" } }, 加钮, 图像设置.添加按钮,
+                el("span", { class: "lvp-hint", text: "添加后在上方对应列表填写新行（含 Key），点「保存配置」生效" })))));
+
+    面板.append(专项设置.根);
+    面板.append(创建数据管理({ el }).根);
 
     // —— 页脚：状态 + 保存 ——
     const 状态 = el("span", { class: "lvp-msg" });
@@ -381,6 +422,9 @@ function 渲染配置面板(宿主) {
         }));
         delete patch.api_key;   // 生效密钥由后端从选中模型条目派生，前端不直写
         delete patch.错;
+        let 图像patch;
+        try { 图像patch = 图像设置.取保存数据(); }
+        catch (e) { 状态.className = "lvp-msg err"; 状态.textContent = e.message; return; }
         存钮.disabled = true; 状态.className = "lvp-msg"; 状态.textContent = "保存中…";
         try {
             const resp = await fetch("/lvp/llm_config", {
@@ -388,17 +432,21 @@ function 渲染配置面板(宿主) {
             });
             const 数据 = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(数据.error || `HTTP ${resp.status}`);
+            try { await 图像设置.保存(图像patch); }
+            catch (e) { throw new Error(`文本模型已保存，图像模型保存失败：${e.message}`); }
+            try { await 专项设置.保存(); }
+            catch (e) { throw new Error(`模型配置已保存，专项配置保存失败：${e.message}`); }
             // POST 响应即脱敏配置：用其 models 刷新清单（has_key 最新、编辑行收起）；旧后端无 models 时本地折算
             草稿.models = Array.isArray(数据.models) && 数据.models.length ? 数据.models
                 : patch.api_models.map(({ api_key, ...r }) => ({ ...r, has_key: !!api_key }));
+            草稿.ai_model_selections = 数据.ai_model_selections || patch.ai_model_selections || {};
             同步镜像();
             刷新模型列表();
             已改 = false;
             状态.className = "lvp-msg ok";
-            状态.textContent = "已保存（服务器端 规划/规划器配置.json）";
+            状态.textContent = "已保存（服务器端模型配置）";
             提示(宿主, "API 模型配置已保存", "success");
-            // 广播「配置已存」→ 状态栏模型下拉重拉标注（配完 Key 无需手动切界面刷新「未配置Key」）；
-            // 事件名字面量与 状态栏面板.js 的 addEventListener 镜像。
+            // 保留配置变更事件供其他配置消费者使用；三个入口运行时均读取服务器端用途选择。
             window.dispatchEvent(new CustomEvent("长视频规划师_配置已存"));
         } catch (e) {
             状态.className = "lvp-msg err";
@@ -462,6 +510,6 @@ export async function 注册规划设置(_app) {
         name: "API 模型配置",
         type: () => 渲染配置面板(宿主),   // 函数型 → 宿主 CustomFormValue 把返回 DOM 挂进设置项
         defaultValue: "",
-        tooltip: "API 模型统一清单（预设可编辑 + 自定义），API Key 按模型各自保存 / 全局超时；保存写入服务器端 规划/规划器配置.json（已 gitignore，明文不入库）",
+        tooltip: "文本与图像API模型独立清单，Key按模型保存；配置写入服务器端规划器配置.json和图像模型配置.json，密钥不下发浏览器、不入库",
     });
 }

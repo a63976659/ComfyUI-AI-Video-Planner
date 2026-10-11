@@ -1,3 +1,4 @@
+import { 创建操作组 } from "./操作锁.js";
 import { app } from "../../../scripts/app.js";
 import { 打开媒体预览 } from "./媒体预览.js";
 
@@ -35,11 +36,12 @@ async function 弹确认(标题, 消息) {
     return window.confirm(`${标题}\n\n${消息}`);
 }
 
-export function 创建参考文件区(容器, { 变更, 共用变更, 捕获快照 }) {
+export function 创建参考文件区(容器, { 变更, 共用变更, 音频模式变更, 提示词优化, 审查标签, 捕获快照, 状态 }) {
     const 盒 = document.createElement("div");
     盒.className = "lvp-参考";
     容器.appendChild(盒);
     let 素材 = { 图片: [], 音频: [], 视频: [] };
+    const 操作组 = 创建操作组(状态);
     // 上传跨 await fetch 的回写作废追踪（spec 上传换绑）：
     //   ·切段代数：设值() 由 回填 在换节点/换选中段/全刷/重绑 时调用 → 每次目标重绑 ++。
     //     节点快照对「同节点换选中段」无效（选中段不入时间轴数据），靠此拦。
@@ -48,6 +50,8 @@ export function 创建参考文件区(容器, { 变更, 共用变更, 捕获快�
     // 「全段共用」开关态（真源在当前段 refs.共用，此处仅缓存供渲染）：
     // 共用=是否本段素材覆盖所有段；共用可见=是否 r2v/v2v/rv2v（由状态栏面板 设共用可见 控制）。
     let 共用 = false, 共用可见 = true, 共用头 = null, 共用钮 = null;
+    let 音频模式 = "默认", 音频按钮 = [];
+    let 优化中 = false, 优化钮 = null;
 
     function 渲染() {
         盒.innerHTML = "";
@@ -104,24 +108,43 @@ export function 创建参考文件区(容器, { 变更, 共用变更, 捕获快�
             组.ondrop = (e) => { e.preventDefault(); 拖入分流(e.dataTransfer.files); };
             盒.appendChild(组);
         }
-        // 「全段共用」开关＋「清理素材」：置于素材区右侧（图片/视频/音频 三组之后），同一列组上下两排
+        // 素材区右侧依次为优化、审查、共用、清理和两个音频按钮。
         // （横向各占一排太吃宽度）。开启共用后本段素材将覆盖所有段
         // （执行核心 _查找共用素材 找到第一个 refs.共用=True 的段，用其素材统一覆盖），
-        // 用户只需编辑每段提示词；i2v/fl2v 用段级首尾帧、t2v 无参考 → 由 设共用可见 隐藏（只隐藏共用这一排）。
+        // 用户只需编辑每段提示词；i2v/fl2v 用段级首尾帧、t2v 无参考，隐藏共用和视频音频管理。
         const 共用组 = document.createElement("div");
         共用组.className = "lvp-参考组";
         共用头 = document.createElement("div");
         共用头.className = "lvp-参考头";
-        const 共用标 = document.createElement("span");
-        共用标.textContent = "全段共用";
         共用钮 = document.createElement("button");
         共用钮.className = "lvp-胶囊";
         共用钮.type = "button";
+        共用钮.textContent = "全段共用";
+        共用钮.setAttribute("aria-label", "全段共用");
         共用钮.title = "开启：本段素材将覆盖所有段（全段统一使用本段上传的参考素材），只需编辑各段提示词；关闭：每段使用各自的素材";
         共用钮.onclick = () => { 共用 = !共用; 更新共用钮(); 共用变更?.(共用); };
-        共用头.append(共用标, 共用钮);
+        共用头.appendChild(共用钮);
         共用头.style.visibility = 共用可见 ? "visible" : "hidden";
         更新共用钮();
+        音频按钮 = [];
+        const 音频头 = document.createElement("div");
+        音频头.className = "lvp-参考音频管理";
+        音频头.style.visibility = 共用可见 ? "visible" : "hidden";
+        for (const [模式, 名, 说明] of [
+            ["生成音频", "禁用原声", "禁止视频自带音轨参与模型参考；输出保存模型生成的音频。再次点击恢复默认。"],
+            ["素材原声", "原声输出", "禁止视频自带音轨参与模型参考；输出改用第一条有声视频的原声，按段裁剪。再次点击恢复默认。"],
+        ]) {
+            const 行 = document.createElement("div"); 行.className = "lvp-参考头";
+            const b = document.createElement("button"); b.type = "button"; b.className = "lvp-胶囊";
+            b.textContent = 名; b.title = 说明; b.setAttribute("aria-label", 名);
+            b.onclick = () => {
+                const 候选 = 音频模式 === 模式 ? "默认" : 模式;
+                if (音频模式变更?.(候选) === false) return;
+                音频模式 = 候选; 更新音频钮();
+            };
+            音频按钮.push([模式, b]); 行.appendChild(b); 音频头.appendChild(行);
+        }
+        更新音频钮();
         // 清理确认同时锁定切段代数和节点快照，重配不回填参考区时也必须作废。
         const 清理头 = document.createElement("div");
         清理头.className = "lvp-参考头";
@@ -130,7 +153,7 @@ export function 创建参考文件区(容器, { 变更, 共用变更, 捕获快�
         钮.type = "button";
         钮.textContent = "清理素材";
         钮.title = "一键清除本段已添加的全部图像/视频/音频素材（弹窗确认后生效，不删除磁盘文件）";
-        钮.onclick = async () => {
+        钮.onclick = () => 操作组.运行("清理参考素材", async () => {
             if (!素材.图片.length && !素材.视频.length && !素材.音频.length) { toast("没有可清理的素材"); return; }
             const 发起切段 = 切段代数, 快照 = 捕获快照?.();
             const 确认 = await 弹确认("清理素材",
@@ -138,17 +161,41 @@ export function 创建参考文件区(容器, { 变更, 共用变更, 捕获快�
             if (!确认) return;
             if (发起切段 !== 切段代数) { toast("节点或选中段已变化，未执行清理"); return; }
             if (提交(快照, { 图片: [], 音频: [], 视频: [] })) 请求序号++;
-        };
+        });
         清理头.appendChild(钮);
-        共用组.append(共用头, 清理头);
+        if (提示词优化) {
+            const 行 = document.createElement("div"); 行.className = "lvp-参考头";
+            行.style.visibility = "visible";
+            优化钮 = document.createElement("button"); 优化钮.type = "button"; 优化钮.className = "lvp-胶囊";
+            优化钮.title = "按当前任务和首尾帧绑定优化当前提示词；仅使用文字资料，模型在配置页选择";
+            优化钮.onclick = 提示词优化;
+            优化钮.disabled = 优化中; 优化钮.textContent = 优化中 ? "优化中…" : "提示词优化";
+            行.appendChild(优化钮); 共用组.appendChild(行);
+        }
+        if (审查标签) {
+            const 行 = document.createElement("div"); 行.className = "lvp-参考头";
+            // 文生视频隐藏参考区时，提示词工具仍需可见，与优化入口一致。
+            行.style.visibility = "visible";
+            const b = document.createElement("button"); b.type = "button"; b.className = "lvp-胶囊";
+            b.textContent = "审查标签";
+            b.title = "审查当前提示词中没有对应素材的标签，确认后转为普通文字，避免生成时报错";
+            b.onclick = 审查标签; 行.appendChild(b); 共用组.appendChild(行);
+        }
+        共用组.append(共用头, 清理头, 音频头);
         盒.appendChild(共用组);
     }
 
-    // 开关按钮外观随 共用 态刷新（激活=蓝色胶囊 + "开"，否则灰 + "关"）；复用 .lvp-胶囊 样式，无需新增 CSS。
+    // 固定按钮名称，用蓝色激活态表示开启，与音频管理按钮保持一致。
     function 更新共用钮() {
         if (!共用钮) return;
         共用钮.classList.toggle("激活", 共用);
-        共用钮.textContent = 共用 ? "开" : "关";
+        共用钮.setAttribute("aria-pressed", String(共用));
+    }
+    function 更新音频钮() {
+        for (const [模式, b] of 音频按钮) {
+            b.classList.toggle("激活", 音频模式 === 模式);
+            b.setAttribute("aria-pressed", String(音频模式 === 模式));
+        }
     }
 
     function 触发上传(槽) {
@@ -173,45 +220,48 @@ export function 创建参考文件区(容器, { 变更, 共用变更, 捕获快�
     function 上传文件(槽, 文件列表) { 上传分组({ [槽]: [...(文件列表 || [])] }); }
 
     async function 上传分组(分组) {
-        // 发起时锁定目标三元组：换节点/换段/删段/重配/新一批上传 均会使本批作废。
-        //   ·快照 拦 “节点身份+时间轴版本+节点代数”（换节点/删段改时间轴/工作流重配）；
-        //   ·切段代数 拦 “选中段变化”（同节点换段，时间轴数据未变）；
-        //   ·请求序号 拦 “后发先至/旧批后到”（并发多批只认最新）。
-        //   一次拖入跨多槽也只 ++ 一次：整批同进同退，槽间不互相作废。
-        const 槽序 = ["图片", "视频", "音频"].filter(槽 => 分组[槽]?.length);
-        if (!槽序.length) return;
-        const 快照 = 捕获快照?.();
-        const 发起切段 = 切段代数, 本次序号 = ++请求序号;
-        const 新增 = { 图片: [], 视频: [], 音频: [] };   // 只收集，不落 素材；await 期间目标一旦变化整批作废，不污染当前视图
-        for (const 槽 of 槽序) {
-            for (const 文件 of 分组[槽]) {
-                if (素材[槽].length + 新增[槽].length >= 上限[槽]) { toast(`${槽}已达上限 ${上限[槽]}`); break; }
-                const fd = new FormData();
-                fd.append("file", 文件, 文件.name);
-                try {
-                    const res = await fetch("/lvp/media/upload", { method: "POST", body: fd });
-                    const data = await res.json();
-                    // HTTP 边界（Task 12 §接口约束 3）：4xx/5xx 走 JSON {error}，fetch 不抛，
-                    // 若不判 res.ok 直接读 data.name → undefined 会污染数组（后续 stringify 落
-                    // widget 变 null、后端 _规范列表 静默丢 → 序号错位）。
-                    if (!res.ok) { toast(`上传失败（HTTP ${res.status}）：${data?.error || "服务端错误"}`); continue; }
-                    if (data.name && !素材[槽].includes(data.name) && !新增[槽].includes(data.name)) 新增[槽].push(data.name);
-                    if (data.dedup) toast(`已存在，跳过重复：${data.name}`);
-                } catch (e) { toast("上传失败：" + e.message); }
+        return 操作组.运行("上传参考素材", async () => {
+            // 发起时锁定目标三元组：换节点/换段/删段/重配/新一批上传 均会使本批作废。
+            //   ·快照 拦 “节点身份+时间轴版本+节点代数”（换节点/删段改时间轴/工作流重配）；
+            //   ·切段代数 拦 “选中段变化”（同节点换段，时间轴数据未变）；
+            //   ·请求序号 拦 “后发先至/旧批后到”（并发多批只认最新）。
+            //   一次拖入跨多槽也只 ++ 一次：整批同进同退，槽间不互相作废。
+            const 槽序 = ["图片", "视频", "音频"].filter(槽 => 分组[槽]?.length);
+            if (!槽序.length) return;
+            const 快照 = 捕获快照?.();
+            const 发起切段 = 切段代数, 本次序号 = ++请求序号;
+            const 新增 = { 图片: [], 视频: [], 音频: [] };   // 只收集，不落 素材；await 期间目标一旦变化整批作废，不污染当前视图
+            for (const 槽 of 槽序) {
+                for (const 文件 of 分组[槽]) {
+                    if (素材[槽].length + 新增[槽].length >= 上限[槽]) { toast(`${槽}已达上限 ${上限[槽]}`); break; }
+                    const fd = new FormData();
+                    fd.append("file", 文件, 文件.name);
+                    try {
+                        const res = await fetch("/lvp/media/upload", { method: "POST", body: fd });
+                        const data = await res.json();
+                        // HTTP 边界（Task 12 §接口约束 3）：4xx/5xx 走 JSON {error}，fetch 不抛，
+                        // 若不判 res.ok 直接读 data.name → undefined 会污染数组（后续 stringify 落
+                        // widget 变 null、后端 _规范列表 静默丢 → 序号错位）。
+                        if (!res.ok) { toast(`上传失败（HTTP ${res.status}）：${data?.error || "服务端错误"}`); continue; }
+                        if (data.name && !素材[槽].includes(data.name) && !新增[槽].includes(data.name)) 新增[槽].push(data.name);
+                        if (data.dedup) toast(`已存在，跳过重复：${data.name}`);
+                    } catch (e) { toast("上传失败：" + e.message); }
+                }
             }
-        }
-        if (本次序号 !== 请求序号 || 发起切段 !== 切段代数) {
-            if (槽序.some(槽 => 新增[槽].length)) toast("节点、当前段或更新的任务已变化，上传结果未应用，请重新上传");
-            return;
-        }
-        提交(快照, {
-            图片: [...素材.图片, ...新增.图片],
-            音频: [...素材.音频, ...新增.音频],
-            视频: [...素材.视频, ...新增.视频],
+            if (本次序号 !== 请求序号 || 发起切段 !== 切段代数) {
+                if (槽序.some(槽 => 新增[槽].length)) toast("节点、当前段或更新的任务已变化，上传结果未应用，请重新上传");
+                return;
+            }
+            提交(快照, {
+                图片: [...素材.图片, ...新增.图片],
+                音频: [...素材.音频, ...新增.音频],
+                视频: [...素材.视频, ...新增.视频],
+            });
         });
     }
 
     function 提交(快照, 候选 = 素材) {
+        if (!操作组.可操作()) return false;
         const 副本 = { 图片: [...候选.图片], 音频: [...候选.音频], 视频: [...候选.视频] };
         // 异步上传和清理确认均携带发起快照；拒绝时不得把候选写入显示缓存。
         if (变更?.(副本, 快照) === false) {
@@ -235,9 +285,15 @@ export function 创建参考文件区(容器, { 变更, 共用变更, 捕获快�
 
     渲染();
     return {
+        设优化中: (v) => {
+            优化中 = !!v;
+            if (优化钮) { 优化钮.disabled = 优化中; 优化钮.textContent = 优化中 ? "优化中…" : "提示词优化"; }
+        },
         设值, 取值: () => ({ ...素材 }),
         设共用: (v) => { 共用 = !!v; 更新共用钮(); },
-        设共用可见: (v) => { 共用可见 = !!v; if (共用头) 共用头.style.visibility = 共用可见 ? "visible" : "hidden"; },
+        设视频音频模式: (v) => { 音频模式 = ["生成音频", "素材原声"].includes(v) ? v : "默认"; 更新音频钮(); },
+        设共用可见: (v) => { 共用可见 = !!v; if (共用头) 共用头.style.visibility = 共用可见 ? "visible" : "hidden";
+            const 音频头 = 盒.querySelector(".lvp-参考音频管理"); if (音频头) 音频头.style.visibility = 共用可见 ? "visible" : "hidden"; },
         盒,   // 盒：供状态栏面板按任务类型联动显隐
     };
 }

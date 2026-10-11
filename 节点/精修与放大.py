@@ -76,7 +76,7 @@ class 精修与放大(io.ComfyNode):
             ],
             outputs=[io.Image.Output("图像"), io.Audio.Output("音频"), io.Float.Output("帧率"),
                      io.Int.Output("帧数"), io.String.Output("报告")],
-            hidden=[io.Hidden.unique_id],
+            hidden=[io.Hidden.unique_id, io.Hidden.prompt],
         )
 
     @classmethod
@@ -155,7 +155,12 @@ class 精修与放大(io.ComfyNode):
             images, audio, report = run(初采产物, models, params, upscale, node_id, 进度回调=progress)
         else:
             images, audio, report = run(初采产物, models, params, upscale, 进度回调=progress)
-        return io.NodeOutput(images, audio, float(初采产物["output_fps"]), int(初采产物["frame_count"]), report)
+        if "." in __package__:
+            from ..制作.结果接收 import 交付生成结果
+        else:
+            from 制作.结果接收 import 交付生成结果
+        ui_data = 交付生成结果(images, audio, float(初采产物["output_fps"]), 初采产物, cls.hidden)
+        return io.NodeOutput(images, audio, float(初采产物["output_fps"]), int(初采产物["frame_count"]), report, ui=ui_data)
 
 
 # 说明与别名放在文件末尾的模块常量里：schema 段内的连线口声明与磁盘引用校验那两行被多份文档

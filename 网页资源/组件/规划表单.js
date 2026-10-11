@@ -123,7 +123,7 @@ export function 打开规划表单({ on规划完成 }) {
     (async () => {
         try {
             const meta = await 取JSON("/lvp/plan_meta");
-            填下拉(平台, meta.平台, "抖音"); 填下拉(钩, meta.钩子, "悬念钩"); 填下拉(任务, meta.任务, "t2v");
+            填下拉(平台, ["通用", ...(meta.平台 || []).filter(v => v !== "通用")], "通用"); 填下拉(钩, meta.钩子, "悬念钩"); 填下拉(任务, meta.任务, "t2v");
         } catch (e) { toast(`拉取规划枚举失败：${e.message || e}`, "error"); }
     })();
 

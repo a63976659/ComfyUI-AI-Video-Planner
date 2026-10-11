@@ -1,3 +1,4 @@
+import { 取操作忙, 开始操作, 结束操作 } from "./操作锁.js";
 // 计划数据：把当前节点的全部 widget + 时间轴打包保存到 插件根/计划数据/<名>.json，
 // 下次通过下拉一键加载复原。UI 位于状态栏提示词编辑区上方的工具行末尾（居右）。
 //
@@ -66,7 +67,7 @@ function 校验名(名) {
     return 净;
 }
 
-export function 创建计划数据(容器, { 取节点, 计划已加载, 取规划编辑状态, 取在途 }) {
+export function 创建计划数据(容器, { 取节点, 计划已加载, 取规划编辑状态, 取在途, 状态 }) {
     const 组 = document.createElement("label");
     // margin-left:auto 把整组推到工具行最右（工具行不换行；窄屏溢出时 auto 边距归零，本组紧随前组继续排）
     组.style.cssText = "display:flex;align-items:center;gap:4px;margin-left:auto";
@@ -132,6 +133,7 @@ export function 创建计划数据(容器, { 取节点, 计划已加载, 取规�
             //   随存档一并保存，下次加载完整往返（A2）。
             剪辑草稿: 真源.读剪辑草稿(node),
         };
+        if (node.properties?.规划分集编辑?.分集) 数据.分集编辑 = JSON.parse(JSON.stringify(node.properties.规划分集编辑));
         for (const 名 of 直读widget名) {
             const v = 取widget(node, 名)?.value;
             if (v !== undefined) 数据[名] = v;
@@ -158,6 +160,14 @@ export function 创建计划数据(容器, { 取节点, 计划已加载, 取规�
         const 有效 = !缺草稿 && 草 && typeof 草 === "object" && (草.brief || 草.segments);
         if (有效) 分配段ID(草.segments);
         真源.写剪辑草稿(node, 有效 ? 草 : { brief: {}, segments: [] });
+        const 缓存 = 数据.分集编辑;
+        if (有效 && 缓存?.项目 === 草.规划资料?.项目 && 缓存?.分集 && typeof 缓存.分集 === "object") {
+            node.properties.规划分集编辑 = JSON.parse(JSON.stringify(缓存));
+        } else delete node.properties.规划分集编辑;
+        const 引用 = 有效 && 草.规划资料?.任务引用;
+        if (引用?.id && 引用?.token) node.properties.规划成果任务 = { ...引用, stages: 草.规划资料?.阶段成果 || [] };
+        else delete node.properties.规划成果任务;
+        delete node.properties.规划任务缓存;
         for (const 名 of 直读widget名) {
             if (数据[名] != null) 写值(node, 名, 数据[名]);
         }
@@ -196,7 +206,7 @@ export function 创建计划数据(容器, { 取节点, 计划已加载, 取规�
     async function 加载(名) {
         if (!名) return;
         // B3：加载会写 时间轴数据 + 剪辑草稿，流式批窗口内做这事会互相作废（两边都报错），一律先拒。
-        if (取在途?.()) { toast("AI 生成提示词进行中，请等待完成后再加载计划"); 加载sel.value = ""; return; }
+        if (取操作忙(状态) || 取在途?.()) { toast("当前操作进行中，请等待完成后再加载计划"); 加载sel.value = ""; return; }
         const node = 取节点?.();
         if (!node) { toast("请先在画布上创建/选中一个长视频规划师节点"); 加载sel.value = ""; return; }
         // 跨 await（覆盖确认 + 网络）后目标节点可能已换绑/删除/重配/内容被编辑：先捕获节点快照，
@@ -208,12 +218,14 @@ export function 创建计划数据(容器, { 取节点, 计划已加载, 取规�
         const 段数 = Array.isArray(当前?.segments) ? 当前.segments.length : 0;
         const 草稿 = 真源.读剪辑草稿(node);
         const 草稿段数 = Array.isArray(草稿?.segments) ? 草稿.segments.length : 0;
-        if (段数 > 0 || 草稿段数 > 0 || Object.keys(草稿?.brief || {}).length > 0 || 编辑状态?.有内容) {
-            const ok = await 弹确认("覆盖当前计划",
-                `当前节点已有时间轴、剪辑草稿或规划表单内容，加载「${名}」将覆盖这些内容，继续？`);
-            if (!ok) { 加载sel.value = ""; return; }
-        }
+        const 令牌 = 开始操作(状态, "加载计划");
+        if (!令牌) { 加载sel.value = ""; return; }
         try {
+            if (段数 > 0 || 草稿段数 > 0 || Object.keys(草稿?.brief || {}).length > 0 || 编辑状态?.有内容) {
+                const ok = await 弹确认("覆盖当前计划",
+                    `当前节点已有时间轴、剪辑草稿或规划表单内容，加载「${名}」将覆盖这些内容，继续？`);
+                if (!ok) { 加载sel.value = ""; return; }
+            }
             const res = await fetch(加载接口 + "?name=" + encodeURIComponent(名));
             const data = await res.json();
             if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
@@ -231,6 +243,7 @@ export function 创建计划数据(容器, { 取节点, 计划已加载, 取规�
         } catch (e) {
             toast("加载失败：" + (e?.message || e));
         } finally {
+            结束操作(状态, 令牌);
             加载sel.value = "";   // 无论成败都清回占位，允许再次选同一条触发 change
         }
     }
@@ -240,6 +253,7 @@ export function 创建计划数据(容器, { 取节点, 计划已加载, 取规�
 
     刷新选项UI();   // 先渲染出只有「（加载）」占位的下拉，避免清单响应前是空白控件
     刷新列表();
+    window.addEventListener("lvp-数据已变化", 刷新列表);
 
-    return { 刷新列表 };
+    return { 刷新列表, 重置选择: () => { 加载sel.value = ""; } };
 }
