@@ -29,7 +29,8 @@ import time
 
 from .规划 import 解析时间轴
 from .条件组装 import 选管线, 选模型槽, 需要首帧, 需要尾帧, 组装参考入参
-from .参考素材 import 解析槽位, 校验标签, 上限
+from .参考素材 import (解析槽位, 校验标签, 提取标签, 上限, 查找共用参考, 合并参考素材,
+                    探测参考音轨, 参考标签槽位, 视频音频模式, 禁用音轨提示词)
 from .采样与解码 import 对齐画布, 解码音视频, 秒转帧数, FPS, CANVAS_MULTIPLE
 # ⚠️ _latent_t_转帧数 带下划线只表示「不是 段间连续 的对外 API」，同包内借用无妨：_是采样产物
 # 要用它做「缓存里的 帧数 与 latent 时长是否同源」的自洽校验（官方 FRAME_PER_TOKEN 累加式的逆换算）。
@@ -38,6 +39,7 @@ from .段间连续 import (裁前缀帧数, 默认上下文帧数, 取尾帧_lat
                     默认音频上下文帧数, 续拍算法标识, 验证宿主续拍条件, 匹配开头色光,
                     缩放视频latent空间)
 from .段缓存 import 段指纹, 读缓存, 写缓存, 缓存统计
+from .台词配音 import 校验配音引用, 读取台词配音, 统一配音音轨
 from .初采产物 import 记录初采段, 组装初采产物
 from .官方管线适配 import 调用节点
 # SelfLift 渐进分辨率采样（可选路径）：门控/取维度 用别名点明归属，采样函数按本名调用。
@@ -179,6 +181,11 @@ def _取缓存(种类, 路径, 额外键, 加载):
         return 加载()
     键 = (种类, 路径, st.st_mtime_ns, st.st_size, 额外键)
     if 键 not in _参考缓存:
+        if 种类 == "视窗":
+            # 每条共用视频只保留最近一段，供同段多次构建条件复用；不累计整条时间轴的画面。
+            for 旧键 in list(_参考缓存):
+                if 旧键[:2] == (种类, 路径):
+                    del _参考缓存[旧键]
         _参考缓存[键] = 加载()
     return _参考缓存[键]
 
@@ -299,7 +306,7 @@ def _ffmpeg转码wav(路径, 超时秒=120):
     try:
         try:
             r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                               text=True, timeout=超时秒)
+                               text=True, encoding="utf-8", errors="replace", timeout=超时秒)
         except subprocess.TimeoutExpired:
             raise ValueError(f"ffmpeg 转码超时（>{超时秒}s）：{路径}")
         if r.returncode != 0:
@@ -338,7 +345,7 @@ def _加载音频(路径, 起秒=None, 止秒=None):
     return {"waveform": wave[:, a:b].unsqueeze(0), "sample_rate": sr}
 
 
-def _加载视频帧(路径, fps=24, 上限秒=15):
+def _加载视频帧(路径, fps=24, 上限秒=15, 起秒=None, 止秒=None):
     """imageio 读视频 → IMAGE [T,H,W,C] float32 0..1（官方参考视频按 24fps、2-15s，>=5 帧）。
     依赖可选视频后端（imageio-ffmpeg 或 av）；缺失时由上层降级为「无视频参考」。
 
@@ -350,7 +357,74 @@ def _加载视频帧(路径, fps=24, 上限秒=15):
     故官方节点随后那次**同尺寸** _resize 是逐位恒等变换（comfy.utils.lanczos 先量化到
     uint8，而本函数产出的正是 uint8/255，round-trip 无损；PIL 同尺寸 resize 直接 copy），
     产物与「不预缩放」逐位相同——无需动段缓存指纹。B：同一轮内按路径+文件戳复用。"""
+    if 起秒 is not None and 止秒 is not None:
+        return _取缓存("视窗", 路径, (fps, 上限秒, 起秒, 止秒),
+                      lambda: _读视频窗(路径, fps, 上限秒, 起秒, 止秒))
     return _取缓存("视", 路径, (fps, 上限秒), lambda: _读视频帧(路径, fps, 上限秒))
+
+
+def _读视频窗(路径, fps, 上限秒, 起秒, 止秒):
+    """定位当前段附近的关键帧，按显示时间戳重采样；只解码该窗，不重复读片头。
+
+    输出时基与官方参考管线相同。15 秒限制作用于当前窗，而非素材开头；源片结束后
+    不循环、不补最后一帧。每帧预缩放后才保存，支持非 24fps 和可变帧率素材。
+    """
+    import av
+    import numpy as np
+    import torch
+
+    起秒 = max(0.0, float(起秒))
+    止秒 = min(float(止秒), 起秒 + 上限秒)
+    上限帧 = max(0, int((止秒 - 起秒) * fps + 1e-7))
+    if 上限帧 == 0:
+        return None
+    with av.open(路径) as container:
+        stream = container.streams.video[0]
+        if stream.start_time is None:
+            # 某些 Matroska 文件没有起点元数据；只读首帧获取原点，避免把非零 PTS 当空窗。
+            首帧 = next(container.decode(stream), None)
+            if 首帧 is None:
+                return None
+            if 首帧.pts is None:
+                raise ValueError(f"参考视频缺少时间戳，无法按共用时间窗裁剪：{路径}")
+            原点 = float(首帧.pts * 首帧.time_base)
+            del 首帧
+        else:
+            原点 = float(stream.start_time * stream.time_base)
+        if stream.duration is not None and 起秒 >= float(stream.duration * stream.time_base):
+            return None
+        container.seek(int((原点 + 起秒) / stream.time_base), stream=stream, backward=True)
+        帧, 前帧, 前时刻, 前张量, 目标 = [], None, None, None, None
+
+        def 追加到(边界):
+            nonlocal 前张量, 目标
+            while len(帧) < 上限帧 and 起秒 + len(帧) / fps < 边界 - 1e-8:
+                if 前张量 is None:
+                    arr = 前帧.to_ndarray(format="rgb24").astype(np.float32) / 255.0
+                    前张量 = torch.from_numpy(arr).unsqueeze(0)
+                    if 目标 is None:
+                        目标 = _参考视频画布(前张量.shape[2], 前张量.shape[1])
+                    if (前张量.shape[2], 前张量.shape[1]) != 目标:
+                        前张量 = _缩放到画布(前张量, *目标)
+                帧.append(前张量)
+
+        for frame in container.decode(stream):
+            if frame.pts is None:
+                raise ValueError(f"参考视频缺少时间戳，无法按共用时间窗裁剪：{路径}")
+            时刻 = float(frame.pts * frame.time_base) - 原点
+            if 前帧 is not None:
+                追加到(时刻)
+            elif 时刻 > 起秒 + 1e-7:
+                raise ValueError(f"参考视频无法定位共用时间窗起点 {起秒:g} 秒：{路径}")
+            if len(帧) >= 上限帧:
+                break
+            前帧, 前时刻, 前张量 = frame, 时刻, None
+        else:
+            if 前帧 is not None:
+                # duration 优先保留变帧率末帧的真实展示时间；旧容器缺失时用平均帧率。
+                时长 = float(前帧.duration * 前帧.time_base) if 前帧.duration else 1 / float(stream.average_rate or fps)
+                追加到(前时刻 + 时长)
+        return torch.cat(帧) if 帧 else None
 
 
 def _参考视频画布(源宽, 源高):
@@ -516,6 +590,9 @@ def _预检素材(段列表, 媒体根):
         refs = seg.refs or {}
         槽位 = 解析槽位(refs)   # 图片/音频/视频，保持顺序（不剔除），与下游赋标签同源
         坏 = []
+        配 = 校验配音引用(refs, seg.end - seg.start) if 选模型槽(seg.task) != "ref2va" or 视频音频模式(refs) == "默认" else None
+        if 配 and not os.path.isfile(_绝对路径(配["文件名"], 媒体根)):
+            坏.append(f"台词配音:{配['文件名']}")
         for 类 in ("图片", "音频", "视频"):
             for 名 in 槽位.get(类, []):
                 if not os.path.isfile(_绝对路径(名, 媒体根)):
@@ -659,30 +736,56 @@ def _预检渐进采样(全局参数, 段列表):
     return 渐进, _渐进指纹维度(配置, None if 权重信息 is None else 权重信息.get("digest"))
 
 
-def _解析参考张量(refs, 媒体根, prompt=None, 音频窗=None):
-    """把段 refs（文件名槽位）解析并加载为官方 ReferenceToVideo 的 Autogrow 入参字典。
-    v1：图片→ref_images、视频→ref_videos（仅画面帧）、音频→ref_audios（独立参考音频）；
-    ref_video_audios（参考视频自带音轨配对）留待 v2。参考视频采样帧率取默认 fps=24
-    （官方参考视频基座），不读用户「帧率」widget。
-    音频窗=(起秒,止秒) 非空时（B：参考共用 ON）每条参考音频都按该全局时间轴窗切片后再入 ref_audios。
+def _解析参考张量(refs, 媒体根, prompt=None, 音频窗=None, 参考帧数=None):
+    """画面与自带音轨按视频序号配对；Audio 标签先视频音轨、后独立音频。
 
-    I4（Task 9 code review 回灌）：解析槽位 会静默截断超限项（12 图 → 9 图）；若 prompt
-    引用被丢弃项，官方 tokenizer 静默忽略 → 产物与预期不符。Task 3 预留了 校验标签 交叉
-    检查（docstring 点名"Task 8/9 在把 refs 送进 Autogrow 之前调用"），本函数为唯一接入点；
-    截断悬空 前移为显式 ValueError（走项目 ValueError-only 契约，Task 11 UI 边界接住）。"""
+    共用时间窗同时裁剪视频画面、自带音轨和独立音频；关闭共用时参考视频从零开始。
+    """
     槽位 = 解析槽位(refs)   # {图片:[名], 视频:[名], 音频:[名]}
-    校验标签(prompt, 槽位)   # I4：prompt 中 <Picture N>/<Video K>/<Audio J> 必须指向留存项
+    有音轨 = [_取缓存("音轨标记", _绝对路径(n, 媒体根), None,
+                  lambda n=n: 探测参考音轨({"视频": [n]}, 媒体根)[0])
+              for n in 槽位["视频"]]
+    标签槽位 = 参考标签槽位(槽位, 有音轨)
+    校验标签(prompt, 标签槽位)
+    模式 = 视频音频模式(refs)
+    执行prompt = 禁用音轨提示词(prompt, sum(有音轨)) if 模式 != "默认" else prompt
+    if 模式 != "默认":
+        有音轨 = [False] * len(有音轨)
     图片名 = 槽位.get("图片", [])
     视频名 = 槽位.get("视频", [])
     音频名 = 槽位.get("音频", [])
     _守卫参考长度(图片名, 视频名, 音频名)   # Task 8 §约束 4 长度守卫（防御性，见函数注释）
     图片 = [_加载图像(_绝对路径(n, 媒体根)) for n in 图片名]
-    视频 = [_加载视频帧(_绝对路径(n, 媒体根)) for n in 视频名]
+    起秒, 止秒 = 音频窗 if 音频窗 else (None, None)
+    视频 = [(_加载视频帧(_绝对路径(n, 媒体根), 起秒=起秒, 止秒=止秒) if 音频窗
+             else _加载视频帧(_绝对路径(n, 媒体根))) for n in 视频名]
+    # 官方视频至少需要 5 帧。空窗或不足 5 帧的尾窗跳过，引用不能压缩到下一条视频。
+    if 音频窗:
+        视频 = [v if v is not None and len(v) >= 5 else None for v in 视频]
+    最大视频引用 = max((n for 类, n in 提取标签(prompt) if 类 == "视频"), default=0)
+    if any(v is None for v in 视频[:最大视频引用]):
+        raise ValueError("提示词引用的视频或其前序视频在本段时间窗内为空或不足 5 帧，请调整视频引用或共用时间窗")
+    def 音轨时长(v):
+        n = min(len(v), 参考帧数) if 参考帧数 is not None else len(v)
+        return (5 + max(0, (n - 5) // 17) * 17) / FPS
+
+    音轨起点 = 起秒 if 起秒 is not None else 0
+    视频音频 = [_加载音频(_绝对路径(n, 媒体根), 音轨起点, 音轨起点 + 音轨时长(v))
+               if 有音 and v is not None else None
+               for n, v, 有音 in zip(视频名, 视频, 有音轨)]
     # B：音频窗=(起秒,止秒) 时每条参考音频都按同一全局时间轴窗切片（“全部同样切”）；
     # 空切片的音频 _加载音频 返回 None，组装参考入参 自动丢弃（不影响图片/视频序号）。
-    起秒, 止秒 = 音频窗 if 音频窗 else (None, None)
     音频 = [_加载音频(_绝对路径(n, 媒体根), 起秒, 止秒) for n in 音频名]
-    return 组装参考入参(图片, 视频, None, 音频)
+    # 官方会压缩 None 的序号：被引用条目之前出现空窗时不能让标签悄悄指向另一条音频。
+    联合音频 = [a for a, 有音 in zip(视频音频, 有音轨) if 有音] + 音频
+    最大引用 = max((n for 类, n in 提取标签(执行prompt) if 类 == "音频"), default=0)
+    if any(a is None for a in 联合音频[:最大引用]):
+        raise ValueError("提示词引用的音频或其前序音频在本段时间窗内为空，请调整音频引用或共用时间窗")
+    kwargs = 组装参考入参(图片列表=图片, 视频列表=视频,
+                         视频音频列表=视频音频 if any(有音轨) else None, 音频列表=音频)
+    if 模式 != "默认":
+        kwargs["prompt"] = 执行prompt
+    return kwargs
 
 
 # ---------- 模型补丁：SigmaShift 提到段循环外 + 跨轮缓存（官方链路） ----------
@@ -839,7 +942,7 @@ def 构建段指纹源(seg, 素材摘要, 被锚定, 锚帧数, 前段指纹, �
     返回契约），故一个「被锚定」布尔已足够表达旧版「被锚定 + 上段尾帧」两个同值键（h3-5 删）。
     h3-6 删去「上段尾音频」后不再假定音频恒存在：尾音频及结束坐标由前段产物重推，依赖由前段指纹与续拍采样参数覆盖。
     """
-    return {"task": seg.task, "prompt": seg.prompt, "refs": seg.refs,
+    源 = {"task": seg.task, "prompt": seg.prompt, "refs": seg.refs,
             "start": seg.start, "end": seg.end,
             "素材摘要": 素材摘要,
             "被锚定": bool(被锚定),
@@ -847,6 +950,14 @@ def 构建段指纹源(seg, 素材摘要, 被锚定, 锚帧数, 前段指纹, �
             "前段指纹": (前段指纹 if 被锚定 else None),
             "上下文帧数": int(上下文帧数),
             "i2v比例模式": getattr(seg, "i2v比例模式", "裁剪")}
+    if 选模型槽(seg.task) == "ref2va" and 解析槽位(seg.refs)["视频"]:
+        源["参考视频音轨"] = "paired-audio-v2-window"
+        if 视频音频模式(seg.refs) == "素材原声":
+            # 两种禁用模式的模型条件相同，输出音轨替换不必让已缓存采样失效。
+            源["refs"] = {**seg.refs, "视频音频模式": "生成音频"}
+        elif 视频音频模式(seg.refs) == "默认" and "视频音频模式" in seg.refs:
+            源["refs"] = {k: v for k, v in seg.refs.items() if k != "视频音频模式"}
+    return 源
 
 
 def _内容摘要器():
@@ -890,6 +1001,9 @@ def _素材摘要(refs, 媒体根, 摘要缓存, task):
         值 = (refs or {}).get(键)
         if isinstance(值, str) and 值:
             项[键] = _摘(值)
+    配 = (refs or {}).get("台词配音")
+    if isinstance(配, dict) and isinstance(配.get("文件名"), str):
+        项["台词配音"] = _摘(配["文件名"])
     return 项
 
 
@@ -1028,6 +1142,9 @@ def _外部依赖指纹(时间轴数据, 媒体根, 缓存失效版本=0, 参考
                 值 = refs.get(键)
                 if isinstance(值, str) and 值:
                     名集.add(值)
+            配 = refs.get("台词配音")
+            if isinstance(配, dict) and isinstance(配.get("文件名"), str) and 配["文件名"]:
+                名集.add(配["文件名"])
     tokens = sorted(_指纹摘要(n, 媒体根) for n in 名集)
     raw = f"lvp-ext-v1|失效:{int(缓存失效版本 or 0)}|" + "|".join(tokens)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
@@ -1130,7 +1247,7 @@ def _构建段条件(*, seg, 全局参数, 模型输入, 媒体根, 帧数, 宽,
         # （按全局时间轴切片）；OFF 时 音频窗=None → 整段引用（现状不变）。start/end 与
         # 视频段时间轴同源（状态栏面板.js 建段 start=i*5、end=i*5+5，全局累计秒）。
         音频窗 = (seg.start, seg.end) if 全局参数.get("参考共用") else None
-        kw.update(_解析参考张量(seg.refs, 媒体根, seg.prompt, 音频窗=音频窗))
+        kw.update(_解析参考张量(seg.refs, 媒体根, seg.prompt, 音频窗=音频窗, 参考帧数=帧数))
     时刻1 = time.perf_counter()            # ① 参考解码止（素材已解码完毕）/ ② 条件节点起
     positive, latent = 调用节点(管线, **kw)[:2]
     时刻2 = time.perf_counter()            # ② 条件节点止（含 CLIP/VAE 编码，首段还含其加载）
@@ -1294,21 +1411,7 @@ def _查找共用素材(segments, 全局参数):
 
     优先级：段级 refs.共用 > 全局 widget 参考共用（向后兼容）。
     返回共用素材 dict（图片/音频/视频）或 None（无共用）。"""
-    for seg in segments:
-        refs = seg.refs or {}
-        if refs.get("共用"):
-            return {k: (refs.get(k) or []) for k in ("图片", "音频", "视频")}
-    # 旧版兼容：全局 参考共用=True 时用全局素材池覆盖所有段
-    if 全局参数.get("参考共用"):
-        import json as _json
-        v = 全局参数.get("参考素材")
-        if isinstance(v, str):
-            try:
-                v = _json.loads(v or "{}")
-            except (ValueError, TypeError):
-                v = {}
-        return v if isinstance(v, dict) else {}
-    return None
+    return 查找共用参考((seg.refs for seg in segments), 全局参数)
 
 
 def _应用全局(seg, 全局参数, 共用素材=None):
@@ -1340,21 +1443,7 @@ def _应用全局(seg, 全局参数, 共用素材=None):
     全局提示词 = (全局参数.get("全局提示词") or "").strip()
     prompt = f"{全局提示词}\n{seg.prompt}".strip() if 全局提示词 else seg.prompt
     task = seg.task or 全局参数.get("默认任务") or "t2v"
-    refs = dict(seg.refs or {})
-    # 移除非素材键（段级共用标记不传给下游 解析槽位/组装参考入参）
-    refs.pop("共用", None)
-    if 共用素材 is not None:
-        # 有段开了全段共用：用共用段的素材覆盖所有段的 图片/音频/视频
-        refs.update(共用素材)
-    elif 全局参数.get("参考共用"):
-        # 向后兼容：直调本函数（未经 执行时间轴 的 _查找共用素材）时仍尊重全局 参考共用 标记
-        全局素材 = _读json(全局参数.get("参考素材"))
-        refs.update(全局素材)
-    else:
-        # 无共用：段级素材已在 refs 中，全局素材仅兜底缺失的键（向后兼容旧计划）
-        全局素材 = _读json(全局参数.get("参考素材"))
-        for k, v in 全局素材.items():
-            refs.setdefault(k, v)
+    refs = 合并参考素材(seg.refs, 全局参数, 共用素材)
     return dataclasses.replace(seg, run=bool(run), prompt=prompt, task=task, refs=refs)
 
 
@@ -1424,6 +1513,42 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
 
     # A6：采样前统一校验各 run 段 refs 都能解析到实文件，缺失即 ValueError 点名段（不跑一半才炸）。
     _预检素材(段列表, 媒体根)
+    # 原声必须按24fps基座播放；其他输出帧率会改变画面时长，不能冒充精确配音对齐。
+    配音段 = [s for s in 段列表 if s.run and s.refs.get("台词配音")
+              and (选模型槽(s.task) != "ref2va" or 视频音频模式(s.refs) == "默认")]
+    原声段 = [s for s in 段列表 if 视频音频模式(s.refs) == "素材原声" and 选模型槽(s.task) == "ref2va"]
+    if (配音段 or 原声段) and float(全局参数.get("帧率", FPS)) != FPS:
+        raise ValueError("原声输出需使用24fps，以保持音画时间一致；请调整帧率或取消使用原声")
+    配音文件缓存 = {}
+    配音切片 = {}
+
+    def _读配音文件(路径):
+        if 路径 not in 配音文件缓存:
+            配音文件缓存[路径] = _加载音频(路径)
+        return 配音文件缓存[路径]
+
+    for s in 配音段:
+        配音切片[s.index] = 读取台词配音(s.refs, s.end - s.start, 媒体根, _读配音文件)
+    视频原声切片 = {}
+    def _取视频原声(s):
+        if s.index in 视频原声切片:
+            return 视频原声切片[s.index]
+        slots = 解析槽位(s.refs)
+        flags = 探测参考音轨(slots, 媒体根)
+        name = next((n for n, flag in zip(slots["视频"], flags) if flag), None)
+        if name is None:
+            raise ValueError(f"段{s.index + 1}: 原声输出需要至少一条带音轨的视频素材")
+        start = s.start if 全局参数["参考共用"] else 0
+        whole = _读配音文件(_绝对路径(name, 媒体根))
+        sr = whole["sample_rate"]
+        a, b = _音频窗采样点(start, start + s.end - s.start, sr, whole["waveform"].shape[-1])
+        if b <= a:
+            raise ValueError(f"段{s.index + 1}: 视频原声在本段时间窗内为空")
+        视频原声切片[s.index] = {**whole, "waveform": whole["waveform"][..., a:b].clone()}
+        return 视频原声切片[s.index]
+    for s in 原声段:
+        if s.run:
+            _取视频原声(s)
 
     # 3.1(99)：采样前的数值/时长/官方节点预检（有限性、正时长、裁前缀后有效帧、节点注册）；
     # 计划时长（对齐/裁剪前）一路带到尾部供三时长报告。
@@ -1628,7 +1753,9 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
         输出游标 = 0
         for i, 采样产物 in enumerate(采样产物列表):
             起d = time.perf_counter()
-            段 = _裁并拼(_解码段(采样产物, 模型输入["vae"], 模型输入.get("audio_vae")))
+            执行段 = next((s for s in 段列表 if s.index == int(采样产物.get("index", i))), None)
+            原声输出 = 执行段 is not None and 视频音频模式(执行段.refs) == "素材原声" and 选模型槽(执行段.task) == "ref2va"
+            段 = _裁并拼(_解码段(采样产物, 模型输入["vae"], None if 原声输出 else 模型输入.get("audio_vae")))
             计时计["解码秒"] += time.perf_counter() - 起d
             计时计["解码次"] += 1
             起p = time.perf_counter()
@@ -1646,6 +1773,16 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
             前段末帧 = 拼.结果()[-1]
             前段序号 = 本段序号
             计时计["拼接秒"] += time.perf_counter() - 起p
+            if 原声输出:
+                段["audio"] = _取视频原声(执行段)
+                报告行.append(f"段{本段序号 + 1}: 使用视频素材原声输出，未使用模型生成音频")
+            elif (执行段 is not None and 执行段.refs.get("台词配音")
+                  and (选模型槽(执行段.task) != "ref2va" or 视频音频模式(执行段.refs) == "默认")):
+                校验配音引用(执行段.refs, int(段["images"].shape[0]) / FPS)
+                if 本段序号 not in 配音切片:
+                    配音切片[本段序号] = 读取台词配音(执行段.refs, 执行段.end - 执行段.start, 媒体根, _读配音文件)
+                段["audio"] = 配音切片[本段序号]
+                报告行.append(f"段{本段序号 + 1}: 使用指定配音原声（口型需核查）")
             if 段.get("audio") is not None:
                 音频列表.append({**段["audio"], "帧数": int(段["images"].shape[0])})
             else:
@@ -1678,6 +1815,8 @@ def _执行时间轴内部(时间轴数据, 全局参数, 模型输入, node_id,
                 f"提示: {缺失音频段数}/{len(音频列表)} 段无音频，已按等长静音补齐对齐 A/V")
         else:
             报告行.append("提示: 全部段无音频，输出为无声成片")
+    if 原声段 or any(s.refs.get("台词配音") for s in 段列表):
+        音频列表 = 统一配音音轨(音频列表)
     audio = _拼接音频(音频列表) if 音频列表 else None
     # 3.1(99)：三时长报告——计划（Σ run 段跨度）→ 对齐/裁剪后预计（成片帧数@基座24fps）
     # → 输出播放（成片帧数@用户帧率）。后两者不同即“非24fps 播放会拉伸时长”的可见信号（不暗改时基）。

@@ -76,6 +76,18 @@ class 长视频规划师扩展(ComfyExtension):
         except ImportError as _e:
             logging.warning(f"[长视频规划师] 交接路由跳过: {_e}")
 
+        try:
+            from .后端路由 import 制作路由
+            制作路由.注册路由()
+        except ImportError as _e:
+            logging.warning(f"[长视频规划师] 制作路由跳过: {_e}")
+
+        try:
+            from .节点.视频制作输出 import 视频制作输出
+            节点列表.append(视频制作输出)
+        except ImportError as _e:
+            logging.warning(f"[长视频规划师] 视频制作输出节点跳过: {_e}")
+
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
         return list(dict.fromkeys(节点列表))   # 模块留在 sys.modules 时 on_load 会再跑一遍，去重保证幂等

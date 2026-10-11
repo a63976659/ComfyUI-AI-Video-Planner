@@ -766,6 +766,31 @@ class 交接协调器:
                          {"B_GATE_PASSED"}, node=node)
             return {"cache_node_id": job["refiner_id"], "job_id": job["job_id"], "attempt": job["attempt"]}
 
+    def 取制作交接上下文(self, prompt_id, source=None):
+        """只读本进程已冻结的交接归属，供最终后期接收；不推进或恢复任务。"""
+        with self._临界区():
+            for job in self._jobs.values():
+                phases = job.get("phases", {})
+                if not any(p.get("id") == prompt_id for p in phases.values()):
+                    continue
+                if source is not None and str(source) != str(job["source_id"]):
+                    return None
+                graph = copy.deepcopy(phases["A"]["graph"])
+                graph.update(copy.deepcopy(job["b_graph"]))
+                # 恢复逻辑连线，仅用于归属分析，不再提交到执行队列。
+                graph[job["handoff_id"]] = {"class_type": "初采交接与清理", "inputs": {"初采产物": [job["source_id"], 5]}}
+                return {"source_id": job["source_id"], "a_prompt_id": phases["A"]["id"],
+                        "b_prompt_id": phases["B"]["id"], "state": job["state"],
+                        "graph": graph, "dynamic_ids": copy.deepcopy(job.get("dynamic_ids", {}))}
+        return None
+
+    def 取磁盘制作提交图(self, ref):
+        context = self.取磁盘执行上下文(ref)
+        with self._临界区():
+            job = self._jobs[context["job_id"]]
+            prompt_id = job["phases"]["B"]["id"]
+        return self.取制作交接上下文(prompt_id, ref["source_node_id"])
+
     def _清理超时(self, job):
         # 仍在阶段队列里按等待上限；worker 已取走进入核对说明慢 IO 正在跑，按更大的核对上限。
         等待 = job["state"] == job["phase"] + "_QUEUED"

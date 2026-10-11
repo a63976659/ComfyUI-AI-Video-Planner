@@ -32,7 +32,7 @@ def _有效图像(seg):
 
 def _参考记录(seg, generation):
     slots = 解析槽位(seg["refs"])
-    if slots["音频"] and type(generation.get("audio_vae")) is not bool:
+    if (slots["音频"] or slots["视频"]) and type(generation.get("audio_vae")) is not bool:
         raise _错误(seg, "参考音频需要明确的 generation.audio_vae 布尔记录")
     return slots
 
@@ -237,21 +237,21 @@ def 构建精修条件(段快照, 模型输入, 生成记录, 前段精修结果
         slots = _参考记录(seg, generation)
         enabled = generation.get("audio_vae") is True
         audio_vae = 模型输入.get("audio_vae") if enabled else None
-        if slots["音频"] and enabled and audio_vae is None:
+        if (slots["音频"] or slots["视频"]) and enabled and audio_vae is None:
             raise _错误(seg, "初采启用了参考音频，精修必须提供 audio_vae")
         size = generation.get("参考图尺寸")
         if size not in ("match", "max"):
             raise _错误(seg, "缺少有效的初采参考图尺寸记录")
         try:
-            loaded = _解析参考张量(slots, "", seg["prompt"], 音频窗=seg["reference_audio_window"])
+            loaded = _解析参考张量({**slots, "视频音频模式": seg["refs"].get("视频音频模式", "默认")}, "", seg["prompt"], 音频窗=seg["reference_audio_window"],
+                             参考帧数=seg["frame_count"])
         except OSError as exc:
             校验精修素材(seg, generation)  # 捕获预检到实际读取之间的变化并准确点名。
             names = "、".join(f"{slot}[{i}] {path}" for slot, paths in slots.items()
                              for i, path in enumerate(paths))
             raise _错误(seg, f"参考素材 {names} 读取失败：{exc}") from exc
-        for slot, key, stem in (("图片", "ref_images", "ref_image_"),
-                                ("视频", "ref_videos", "ref_video_"),
-                                ("音频", "ref_audios", "ref_audio_")):
+        # 视频/音频空窗及引用错位由共用解析器检查，与初采采用相同的跳过规则。
+        for slot, key, stem in (("图片", "ref_images", "ref_image_"),):
             actual = loaded.get(key, {})
             for i in range(len(slots[slot])):
                 if actual.get(f"{stem}{i}") is None:

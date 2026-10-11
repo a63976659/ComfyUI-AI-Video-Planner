@@ -4,7 +4,9 @@
 
 A ComfyUI plugin that splits a long video into a few short segments, generates them one by one, and stitches them back into a finished video.
 
-All the real picture-and-sound generation is done by ComfyUI's official MiniMax H3 nodes. This plugin does the running around: let AI plan the shots, split them into segments, run each segment, then join them back. The AI planning and prompt rewriting happen over network requests and never touch your VRAM.
+The existing generation nodes use ComfyUI's official MiniMax H3 pipeline. The Video Production tab automatically receives the current workflow's final generated videos for editing, enhancement and finished-video export. Received videos and voice tracks are added only to production clips, keeping the AI Planning upload area unchanged. AI planning and prompt rewriting use network requests without using VRAM.
+
+The first received video sets the canvas; subsequent clips do not change it, and manual changes are supported. Corresponding voice and subtitles follow clip trims and ordering. Background music, text overlays, picture and audio enhancement, MP4 previews, resumable exports and project backups remain available. Restart ComfyUI and refresh the browser after updating. See the [post-production guide (Chinese)](./文档/技术实现/2026-10-05-视频制作后期调整说明.md).
 
 ---
 
@@ -16,6 +18,7 @@ All the real picture-and-sound generation is done by ComfyUI's official MiniMax 
   - [Step 2: Open the bottom status bar](#step-2-open-the-bottom-status-bar)
   - [Step 3: AI one-click planning (optional)](#step-3-ai-one-click-planning-optional)
   - [Step 4: Edit the timeline](#step-4-edit-the-timeline)
+  - [Shared material and video audio controls](#shared-material-and-video-audio-controls)
   - [Step 5: Click Queue Prompt to start](#step-5-click-queue-prompt-to-start)
 - [Independent upscaling and redrawing (optional)](#independent-upscaling-and-redrawing-optional)
 - [Progressive resolution sampling (optional)](#progressive-resolution-sampling-optional)
@@ -36,11 +39,12 @@ All the real picture-and-sound generation is done by ComfyUI's official MiniMax 
 
 ## What it does
 
-- **AI writes the storyboard**: fill in a short requirements form on the AI Planning tab (topic, total length, segment count, platform, etc. — 12 fields) and the AI produces several storyboard segments following short-video practice. No typing them one by one.
-- **AI rewrites each segment's visual prompt**: the storyboard first lands as a "clip timeline" rehearsal draft you can trim, split, delete and reorder, and zoom into for precision; then the AI rewrites each segment's picture prompt using the skill doc you picked. When you are happy, one click writes it into the real timeline.
+- **AI writes the storyboard**: describe your requirements and choose a purpose such as novel adaptation, knowledge explainers or product ads. The AI organizes the content, generates storyboards and validates them.
+- **AI rewrites each segment's visual prompt**: the storyboard first lands as a "clip timeline" rehearsal draft you can trim, split, delete and reorder, and zoom into for precision; then the AI rewrites each segment's picture prompt using the unified prompt rewriting skill. When you are happy, one click writes it into the real timeline.
 - **Split a long video into segments**: add as many segments as you want, each with its own prompt and duration.
 - **Pick a generation mode per segment**: text-to-video, image-to-video, first-and-last-frame, reference-to-video, video-to-video, reference-plus-video — six modes, freely mixed across segments.
 - **Attach reference material per segment**: images, videos or audio. Inside the prompt you can point at them with tags like `<Picture 1>`.
+- **Trim shared material per segment and control video soundtracks**: reference tasks load shared video and audio from each segment's time window. A video's soundtrack is used as a reference by default; you can disable that reference and keep generated audio, or replace the output with the source soundtrack.
 - **Smooth hand-off between segments**: with the "Gradient Transition" switch on, the end of the previous segment (picture plus about a second of audio) is carried into the next one so it continues naturally. Seams never blend two clips together — only the opening of the continuation gets its colour and brightness eased toward the previous tail. Switch it off and every segment is generated on its own with a hard cut.
 - **Finished segments are saved automatically**: each finished segment goes to disk. Next run, unchanged segments are read back instead of regenerated — a full re-run takes tens of seconds.
 - **The saved segments are visible and controllable**: the "Cache" strip on the node's timeline toolbar shows counts (version/entries/size), clears everything in one click, and a "+1" makes all old segments re-run. Replacing a material file or changing an earlier segment is detected automatically and recalculated — nothing stale is reused quietly.
@@ -65,7 +69,7 @@ It has 5 inputs:
 | `ref2va模型` | model for reference-to-video | optional, connect only if used |
 | `CLIP编码器` | turns your text into something the model reads; must be the minimax type (Qwen3-VL) | required |
 | `视频VAE` | video decoder | required |
-| `音频VAE` | audio decoder | required |
+| `音频VAE` | reference audio encoder and generated audio decoder | required |
 
 For the two model inputs, connect whichever your tasks need; if you use both kinds, connect both.
 
@@ -73,34 +77,46 @@ The first five outputs are still image, audio, frame rate, total frame count and
 
 ### Step 2: Open the bottom status bar
 
-After the plugin loads, a **长视频规划师** panel appears at the **bottom of the ComfyUI page**. Its title bar holds three tabs: **AI Planning** (left, default), **Prompt Timeline** (middle) and **Prompt Editor** (right). Click one to switch (clicking the active tab again collapses the panel, once more re-opens it).
+After the plugin loads, a **长视频规划师** panel appears at the **bottom of the ComfyUI page**. Its title bar holds four tabs in this order: **AI Planning** (default), **Prompt Timeline**, **Prompt Editor** and **Video Production**. Click one to switch (clicking the active tab again collapses the panel, once more re-opens it).
 
 The **Prompt Editor** page has:
 
 - **Generation type** — switch between the 6 task modes
 - **Preset** — pick a saved prompt snippet; its text goes into the global prompt automatically (see [Presets](#presets))
-- **Prompt editor** — write the global prompt, which is put in front of every segment
-- **Reference material area** — upload or drop images / videos / audio. Duplicates are handled for you: same name and same content is just reused; same name but different content is renamed and kept side by side. Dropped files go into the right box by type (images → image box, and so on); a full box (9 images / 3 videos / 3 audio) takes nothing more and unknown types are refused on the spot. Each box is a fixed three rows tall — when it overflows, scroll inside it with the wheel. Below it is a "Clear materials" button that wipes this segment's material in one click, with a confirmation dialog first. Every tile is clickable and opens a pop-up in the middle of the screen — images enlarge, video and audio play with the browser's own controls (seeking included).
+- **Prompt editor** — edit the selected segment's prompt; the global prompt inserted through presets is placed before each segment's prompt
+- **Optimize prompt** — at the top of the button column to the right of the reference materials, uses the same rewriting skill as the timeline and the saved “Prompt optimization model”. It rewrites only the current editor text, using the selected task and actual first/last-frame bindings. For `fl2v`, first-only uses I2VA, last-only uses L2VA, and both use FL2VA; a single image is `<Picture 1>`. It does not upload or inspect media or infer image content from filenames. Accepted results replace the current segment text directly; failures and stale results after segment, node, content or material changes preserve the current text.
+- **Audit tags (审查标签)** — below “Optimize prompt”, available in all six task modes, including text-to-video; checks the current prompt for tags without matching material. After confirmation, these tags become plain text.
+- **Reference material area** — upload or drop images / videos / audio. Duplicates are handled for you: same name and same content is just reused; same name but different content is renamed and kept side by side. Dropped files go into the right box by type (images → image box, and so on); a full box (9 images / 3 videos / 3 audio) takes nothing more and unknown types are refused on the spot. Each box is a fixed three rows tall — when it overflows, scroll inside it with the wheel. To its right is a "Clear materials" button that wipes this segment's material in one click, with a confirmation dialog first. Every tile is clickable and opens a pop-up in the middle of the screen — images enlarge, video and audio play with the browser's own controls (seeking included).
 - **Plan data** — save/load the whole node setup in one click (see [Plan data](#plan-data-save-and-load-full-setups))
 - **Timeline** — the main working area
 
 The matching inputs on the node itself are hidden automatically. The data lives in the node; the bottom panel is just an editor.
 
-The **AI Planning** page splits 2:3. Left is the material upload area (images, videos, audio, text files — sent to the AI along with your requirements when you generate a plan; every file shows as a square thumbnail, all four types on one wall with a type icon on each tile; add one with the "+" tile at the end or by dragging files in; clicking a tile opens the same centred pop-up — images enlarge, video/audio play, text shows from the beginning). Right is the requirements area, split again in two: form fields on the left half, the whole right half given to the large "Detailed Requirements" box. The clip-timeline rehearsal and the per-segment AI rewriting live on the middle **Prompt Timeline** page — timeline on the left (same width as before), the per-segment panel on the right filling what's left. See step 3 below.
+The **AI Planning** page has materials on the left, followed by purpose cards, settings and a single requirements box. The first card, automatic detection, is selected by default for new requirements. Choose novel adaptation, knowledge explainers, product ads, music videos and other uses through cards. All four areas share the available width equally, with consistent gaps between them. Compact purpose cards use a 3-by-3 grid so all nine options are visible together. Add images, video, audio or text with the plus tile or drag-and-drop; click a tile to preview it, and type `@` in the requirements box to reference material. During planning, the four stages—source analysis, episode planning, reference generation and storyboarding—open completed results in structured dialogs with content cards, episode lists, reference galleries and shot cards. Draft editing and per-segment prompt rewriting remain on the **Prompt Timeline** page.
 
 ### Step 3: AI one-click planning (optional)
 
+Planning materials use the authorized Alibaba Cloud Beijing endpoint. Original images, audio and video are uploaded to the provider's model-bound temporary storage; planning requests reuse their `oss://` URLs without frame extraction, transcoding or descriptive substitutes. The existing API key is sufficient. Media snapshots and uploads are processed in chunks rather than encoded entirely in memory. TXT/MD originals use the Files API plus complete verbatim text; Omni does not directly read document file IDs. Only selected materials are processed. Local file-size, aggregate-size, extension, text-length and response-byte caps have been removed, and model names are no longer pinned; the upload service and selected model enforce their own limits and return explicit errors. Temporary media expire under the provider's lifecycle. Task exit releases local snapshots and attempts to delete its uploaded documents. Timeline rewriting and prompt optimization remain text-only; path checks, timeout, cancellation and planning validation remain active. See the [original-input record (Chinese)](文档/技术实现/2026-10-07-规划素材原件发送.md).
+
 If you don't want to fill segments by hand, follow this path (first time needs an API model set up — see [API model setup](#api-model-setup)):
 
-1. **Fill the requirements**: Topic (required), total length in minutes (default 3), suggested length per segment (default 5-8 s, controls pacing), segment count (0 lets the AI decide), default task, hook, language (the 11 dialogue languages H3 handles reliably), style, platform, audience, skill, auxiliary — 12 fields.
-2. **Pick a model and click "Generate plan"**: the AI produces the storyboard and it is stored in a hidden "clip draft" on the node. The rules are: the first segment must be the hook, the last must be the ending/call-to-action, and each segment is 5–15 s. **This draft does not take part in generation** — the node timeline is untouched. If segments come back short, the backend **tries to fill them in once more** (it never duplicates one segment to fake completeness); if still short, you get an **unfinished draft** with an orange on-page warning. When a skill doc is selected, the page tells you honestly which material actually went into the request, and what was cut short or missing.
+1. **Describe your requirements and select a purpose**: put ideas, source text, required content and constraints into one box. Select a card on the left or keep automatic detection. Adjust total length (minutes, default 3; **0 means automatic allocation** based on content, yielding a positive duration), suggested segment length (default 5–8 seconds), segment count (0 means automatic), task, language, style, platform and audience as needed. Old topics and body text appear together; unedited legacy requirements retain their original request fields.
+2. **Click "Generate plan"** (select its model beforehand in API Model Setup): the AI selects planning references, produces storyboards, reviews them and revises them when needed. Long source text is planned in full across episodes. Available storyboards update the clip draft even after partial failure, with reasons, suggestions and missing-content notices. Cancellation or no valid storyboards preserves the original draft. Long-form episodes must cover all source ranges in order, with 1–4 actual range IDs per episode. Invalid references produce an episode-specific format error for AI revision. There is no fixed overall planning time limit, while network waits without data remain subject to the global timeout. You can stop a running task; temporary disconnections reconnect automatically.
+
+   "Generate plan" and "Import planning" share the button row equally. Each generation creates a separate archive, including repeated requirements, and preserves earlier results. Loading a history item restores the selected episode’s original storyboards and all four stage result buttons. It always loads the archived original, including when the same project and episode are already open. The current edits remain available through "Previous step".
+
+   The prompt timeline offers "Previous step" and "Next step", in that order, between "Enable" and "Disable subtitles". "Next step" restores an undone operation. A new content edit after going back clears the redo history; browsing or writing identical content preserves it. "Previous step" immediately undoes one draft operation, including manual edits, duration changes, adding or deleting shots, AI prompt generation and generating or loading a plan. A streamed AI run counts as one operation, including any partial results retained after failure or stopping. Up to 20 undo steps are saved with the node’s workflow properties; large drafts may retain fewer older steps. Each button is disabled when its direction has no history or an operation is running. Undo restores editor content and planning references; undoing ordinary prompt edits preserves unsubmitted requirements and duration settings. The AI planning page no longer has a "Restore previous version" button.
+
+   Settings now includes Data Management for planning archives and saved plans. Save selected records as JSON files to share all episodes and stage results; exported plans include their associated planning archive. Import creates local access credentials and never shares API keys. "Import planning / Import plan" opens the corresponding folder: drop JSON files there and the list refreshes every three seconds. Successfully imported files move to an "Imported" subfolder. Share original image, video and audio files separately. Deleting records requires two confirmations with a reminder to finish all episodes and save a backup. Active or resumable planning projects cannot be deleted.
 3. **Fine-tune on the clip timeline**: use it like an editing program — click empty space to add a segment, drag a card edge to change its length, "✂ Split" cuts at the time pointer, "🗑 Delete" removes one and the rest close the gap, multi-select and drag-to-reorder work too. The ruler above the track is always there (an empty draft still shows a 0-30 s scale) and its tick spacing follows the total length. Each card shows index / range / title / structure / subtitle / keywords.
 4. **Zoom in (view-only)**: "Fit / Zoom out / slider / Zoom in" on the toolbar magnifies up to **1–40×** with the current factor next to it. You can also **wheel-zoom** on the track (hold Ctrl, or pinch on a trackpad — both are more sensitive), **drag the ruler to pan**, or use the bottom scrollbar. Ticks get finer as you zoom (hours → minutes → seconds → 0.1 s), so a long piece can still be aligned segment by segment. Zoom only changes what you see: it never touches segment start/end times, never writes the draft, and does not affect the node timeline or the saved segments; trim, split, seeking and reordering stay exact at any factor.
-5. **"✨ AI Generate Prompts"**: the AI rewrites each segment's full picture prompt from your requirements and the skill doc, and it reads the enable state automatically. With **everything enabled** it works through the segments in order (5 or fewer still happens in one go, same as before). With **only some enabled**, all segments go to the AI as **reference only** but **only the enabled ones are rewritten** (the others keep their original wording and don't need to be counted) — whatever segment goes out is filled back into that same segment. **Since 2026-09-29 it works in batches**: 5 segments per batch by default, each batch is written back immediately when done and the button shows progress (`生成提示词中 k/N 批…`), and the next batch uses what's already written so the shots stay connected. With many segments you no longer wait for everything at once, and there is no single oversized reply that can get cut off. A failed batch only affects that batch (its segments keep their original descriptions, later batches still run). The Skill / Auxiliary / Model used for generation sit in the row above the track. Write-back matches segment to segment — if one fails it **keeps its original draft and is flagged** (old wording is never quietly passed off as new), and failed segments trigger a confirmation.
-6. **Per-segment editing**: select a card and edit Title / Structure / Subtitle / Prompt in the right column; it stays in sync with the card.
+5. **"✨ AI Generate Prompts"**: uses the saved timeline rewriting model and the `AI生成提示词/` skill directory to rewrite existing storyboards from their task, actual reference bindings and text summaries. **No images, video or audio are uploaded or reanalyzed.** Generation runs sequentially with one model request per segment. The four reuse/repair/review/regenerate modes are removed. Quality checks and correction requirements are part of the generation rules, applied within that single request; enabled segments are rewritten, while disabled ones stay unchanged. Context contains the theme, current goal, current storyboard and its bound character/material descriptions, plus necessary style, language and sound constraints. Neighboring storyboards, previous generated prompts and the full brief are excluded. Each prompt must describe its subject, setting and actions independently. Each completed segment is written back immediately with a generated status; there is no separate review or automatic repair request. Request or parsing failures retain the original text with a visible reason. The unified rewriting skill is fixed; model choices are managed in API Model Setup.
+6. **Per-segment editing and speech timing**: select a card to edit Title / Structure / Dialogue or narration / Prompt. Typing dialogue shows live slow, normal and fast speech estimates and whether the shot is tight. Open "台词估时" to adjust speech rates, punctuation pauses and padding; preview the rearrangement before applying it to the draft. Existing shot durations are preserved by default. Long dialogue is split at semantic boundaries with balanced durations. You can specify a minimum action duration and whether action follows speech. Settings persist with the draft; undo is available until later edits. Disabling on-screen subtitles does not silence dialogue.
 7. **"⬆ Fill into node"**: one click writes the **enabled** draft segments into the node's `时间轴数据` field (with an overwrite confirmation). If not everything is enabled, only the enabled ones are filled and their times close up seamlessly while the disabled ones stay in the draft; with everything enabled the result is the same as before. After that it behaves like a normal timeline.
 
 > The AI calls go over the network (same code for cloud and local). They use **zero VRAM** and never touch the generation flow. Planning failures are reported plainly — demo content is never invented.
+
+With an existing voice recording, open "台词估时 → 按已有配音测时与试听" and select media-pool audio to read its actual duration. Recordings over 15 seconds require matching sentence timestamps in SRT or JSON. "成片使用这条配音原声" outputs slices of that recording and pads extra shot time with silence; this mode requires 24 fps. Uncheck it to use the recording for timing only. Applying timing updates the draft; click "Fill into node" to use it for generation. Text estimates are speech-rate assumptions, and recorded audio does not guarantee lip synchronization. Review actions, materials and old timing instructions after splitting. See the [timing and voice alignment guide](文档/技术实现/2026-10-02-台词估时与配音对齐.md).
 
 ### Step 4: Edit the timeline
 
@@ -109,9 +125,29 @@ If you don't want to fill segments by hand, follow this path (first time needs a
 - **Run on/off**: the switch under each card. Only checked ones are regenerated; unchecked ones with a saved copy are reused
 - **Edit prompt / attach material**: click into the card
 - **Time pointer**: drag it to see which segment covers a given moment
+- **Node cards expand with node height**: making the node taller allocates the available card height **1:1** between image and prompt areas. Prompt previews are no longer limited to two lines; they retain their font size and line breaks and show more text as the area grows. Horizontal card widths still follow segment durations. A browser refresh is enough when updating only this UI change.
 - **Gradient Transition**: a switch on the timeline toolbar. On, segments continue smoothly (the previous ending is carried into the next one and the continuation's opening colour is eased toward it, with no overlapping picture). Off, seams are hard cuts.
 
 The whole timeline is kept as a block of text in the node's `时间轴数据` input. You can copy and paste it, which makes archiving and sharing easy.
+
+### Shared material and video audio controls
+
+**Reference-to-video, video-to-video and reference-plus-video** (`r2v`, `v2v`, `rv2v`) accept reference video frames and their soundtracks. Videos with sound take the first Audio tag numbers, followed by separately uploaded audio; silent videos take no Audio number. For example, one video with sound plus one standalone audio file use `<Audio 1>` and `<Audio 2>`. Check the prompt's `@` list for the mapping. Text-to-video, image-to-video and first-and-last-frame tasks do not accept these reference video or audio inputs.
+
+With "全段共用" (Shared across segments) enabled, shared video, its soundtrack and standalone audio are read from each segment's time window. A segment spanning 7–14 seconds starts reading at second 7 of the source; material previews still play the original file. Each video window loads at most its first 15 seconds and is further trimmed to the model's valid frame count. Its paired reference soundtrack uses the same start and the duration of the frames actually retained; standalone audio uses the full segment window. With sharing off, each segment's video and paired soundtrack start at source second 0. First-pass generation and redrawing use the same reference trimming rules.
+
+The button column to the right of the reference area is ordered **Optimize prompt → Audit tags → Shared across segments → Clear materials → Disable soundtrack reference → Use source soundtrack**. The "全段共用" (Shared across segments) button indicates its setting through its active state, without a separate on/off label. Sharing and the two audio controls appear for the three reference task types:
+
+- **禁用原声 (Disable soundtrack reference)**: exclude the video soundtrack from model references and save the model's generated audio.
+- **原声输出 (Use source soundtrack)**: exclude the video soundtrack from model references and replace output audio with the soundtrack of the first video with sound in the material list.
+
+Both controls are off by default, preserving soundtrack references and existing output behavior. They are mutually exclusive; click the active button again to restore the default. Shared segments inherit the audio mode from the shared source; with sharing off, each segment uses its own setting. Neither control disables separately uploaded reference audio. During execution, disabled soundtrack tags are removed and standalone Audio numbers are adjusted; stored prompts stay unchanged, so restoring the default restores their references.
+
+"原声输出" requires the node's frame rate to be **24**. With sharing on, source audio is cropped to each segment's time window; with sharing off, it starts at source second 0 for every segment. Audio is trimmed or padded with silence to match the final pictures, without stretching or changing speed. A missing video soundtrack or an empty required source-audio window produces a clear error. These controls take precedence over existing dialogue voice replacement; subsequent Upscale and Redraw uses the final audio track. Switching between the two disabled-reference modes can reuse the same segment sampling cache.
+
+"原声输出" already skips audio VAE encoding of the video soundtrack and decoding of generated audio. Standalone reference audio still needs encoding if present. The audio VAE input remains required, and its upstream loader may still load the model. Skipping these operations reduces preparation and output work; H3 still samples video and audio jointly, so a noticeably faster sampling progress bar is not guaranteed. GPU timing comparisons have not been performed.
+
+Restart ComfyUI and refresh the browser after updating. Older reference-video caches that omitted soundtracks or always loaded from second 0 are invalidated and need resampling. See the [soundtrack and shared-window guide (Chinese)](./文档/技术实现/2026-10-05-参考视频音轨接入修复.md) for details.
 
 ### Step 5: Click Queue Prompt to start
 
@@ -185,34 +221,27 @@ Set it under **ComfyUI Settings → 🎬 长视频规划师 → API 模型配置
 - **Custom models**: add as many rows as you like (Name / address / Model / API key); a radio button picks the active one. Cloud = any OpenAI-compatible service (Moonshot, DeepSeek, …); local = Ollama / LM Studio with `/v1` compatibility turned on.
 - **A key per model**: every model stores its own key. When saving, an empty box or one containing `****` means "keep this model's existing key". Keys are tied to the address (protocol + host + port + path): changing the address counts as a new service and needs a fresh key — an old credential is never sent to a new address, and a key is never carried along if a request is redirected somewhere else.
 - **Test connectivity**: a button next to each key box sends one tiny request to check name/address/key and shows ✓/✗ on the spot — no need to save first.
-- **Global request timeout**: 120–3600 seconds, default 120. Thinking models (Kimi-K3 and similar) plus a long skill doc often need 300–600.
+- **Global request timeout**: 120–3600 seconds, default 120. Limits connection or consecutive waits without response data for each model request. Transfers can continue while data arrives; there is no overall planning time limit. Model thinking before the first response data also counts as waiting; 300–600 seconds is suggested. Queueing has a separate wait budget, retries receive a fresh network timeout, and connectivity tests remain capped at 30 seconds.
 
 The settings live in `规划/规划器配置.json` (already in `.gitignore` — plain-text keys never get committed).
 
 ---
 
+Three text-model choices are saved under **Settings → 🎬 长视频规划师 → API 模型配置 → AI 功能模型**: AI planning, timeline rewriting, and editor prompt optimization. Each defaults to the current model unless separately selected. Save a newly added model before assigning it; deleting an assigned model restores the default. The planning and timeline pages no longer have separate model selectors.
+
 ## Skills & Knowledge Base
 
-AI planning can write prompts following a skill doc. There are two independent sources and they do **not** share a folder:
+AI planning designs storyboards; the prompt timeline rewrites frozen storyboards. They use two independent reference directories:
 
-### `Skills/` (the "Skill" and "Auxiliary" fields of the AI Planning form)
+### `Skills/` (content planning references selected automatically)
 
-Those two lists read the **first-level sub-folders** of the plugin-root `Skills/` directory — the folder name is the option name:
+AI planning selects references from the purpose card, actual input and planning stage. There are no Skill or Auxiliary selectors on the planning page. Cards express the intended use; the planner still distinguishes novels, scripts, factual material and ideas from the supplied content.
 
-```text
-Skills/
-└── my-skill/
-    ├── SKILL.md            # or 技能说明.md — the main doc, loaded first
-    └── ...                 # other .md/.txt files, joined in order (sub-folders OK)
-```
+Each Chinese skill folder contains 技能卡片.json and 技能说明.md, which declare applicability, dependencies and reference paths. The source receipt lists the references actually used and any truncation. See [the Skills directory guide](Skills/目录说明.md).
 
-- The default is "不指定" (none) for Skill and "无" (none) for Auxiliary = no skill doc injected, a generic storyboard. If `Skills/` is missing or empty, Skill only offers "none" and Auxiliary only offers "none".
-- Both lists re-scan `Skills/` every time you open them (folders added or removed show up immediately) and keep your current selection.
-- The selected doc is put into the prompt (a 60,000-character budget; anything past that is cut with a note). If it can't be read, the planner falls back to the generic style and logs it — planning never fails because of it.
+### `AI生成提示词/` (shared by timeline prompt generation and editor prompt optimization)
 
-### `MiniMax-H3知识库/` (only the Skill/Auxiliary row on the clip timeline)
-
-Ships with the plugin: 9 style skills (通用H3提示词写作 / 3D动画短片 / 极简产品广告 / 纸艺定格科普 / 品牌宣传 / MV歌词字幕 / 双人游戏开场 / 纸质拼贴讲解 / 手绘实拍融合) plus reference docs. That row's "Skill" defaults to 通用H3提示词写作. This folder is third-party material — **do not rename, translate or reorder it** (a wrong name doesn't raise an error, it just quietly falls back to generic; the only symptom is "I picked a skill but there's no style").
+This skill uses `SKILL.md` as its single entry point for shared fidelity, per-second timelines, sound and one-call generation rules. Only the file structure is simplified: detailed rules are retained. H3 additionally loads `参考资料/H3格式.md`, combining the full base and reference guides, terminology and six complete examples; other formats only read the main entry. The loader neither scans extra files nor truncates these references. Both prompt entry points generate each segment with one call and check requirements within that call, without a separate review or repair pass. Existing planning Skills retain responsibility for story, performance and shot design, and image analysis is unchanged. The original eight files are preserved in `文档/归档/AI生成提示词_2026-10-08_重建前.zip`.
 
 ---
 
@@ -389,7 +418,9 @@ If you see smearing, ghosting or artifacts, first turn "渐变过渡" off and ch
 
 **After swapping the model**
 
-To have every segment re-run on a new model you don't need to delete folders by hand: change the node's "缓存失效版本" (or on the Cache strip of the node's timeline toolbar click "+1", or type a number and press Enter) and all old segments are invalidated. The same strip's "Clear segment cache" button deletes the cache files on disk directly (irreversible, this machine only, never touches other files).
+To have every segment re-run on a new model you don't need to delete folders by hand: click "+1" beside "失效版本" on the node's timeline toolbar, or type a number and press Enter, and all old segments are invalidated. The duplicate "缓存失效版本" widget above the timeline is hidden; its value is still saved with the workflow and submitted for execution. The same strip's "Clear segment cache" button deletes the cache files on disk directly (irreversible, this machine only, never touches other files).
+
+**Start a new creation**: click "重置" (Reset) immediately after the timeline's crop button, then confirm in the dialog. This restores the current node's default parameters and clears its segments, material references, planning, prompts, production project, and unsaved forms across all four tabs. Node position and connections, shared API settings, presets, and files on disk are preserved; other nodes are unaffected. Reset is blocked while AI, generation, or production tasks are unfinished. Stop them or wait for completion first. Reset is recorded as one workflow change for the host's Undo action, and late results from older tasks cannot populate the new project.
 
 **Can I connect only one model input?**
 
@@ -397,7 +428,7 @@ Yes. The plugin only checks the models needed by **the tasks actually used in yo
 
 **A segment without audio is padded with silence**
 
-If one segment has no audio while others do (say you plugged in the audio decoder halfway), the audio track doesn't skip the missing one — it pads that segment with silence of the same length, so the audio total stays exactly aligned with the video and never drifts. The report adds a line: "N/M segments have no audio; padded with equal-length silence to keep A/V aligned". If no segment has audio, the output is silent.
+If one segment has no audio while others do, the audio track doesn't skip the missing one — it pads that segment with silence of the same length, so the audio total stays exactly aligned with the video and never drifts. The report adds a line: "N/M segments have no audio; padded with equal-length silence to keep A/V aligned". If no segment has audio, the output is silent.
 
 **The memory floor for a long video**
 
@@ -411,8 +442,97 @@ Set the environment variable `H3_计时=1` and the log breaks each segment into 
 
 ## Changelog
 
+**2026-10-07**
+
+- Completed shared operation locking across planning, prompt rewriting, dialogue timing, fill, load/import, episodes and planning materials. Prompt rewriting uses the batch snapshot submitted at click time; draft editing stays locked for the run while browsing remains available, then unlocks when the request ends. See the [lock and snapshot record (Chinese)](文档/技术实现/2026-10-07-跨页面操作锁与提示词快照.md).
+
+- Timeline saves, subtitle toggles and speech timing no longer append the old reading-instruction template. Dialogue and timing remain in structured fields. Old drafts are cleaned on read and save without removing H3 content, dialogue, material bindings or authored descriptions; timing undo remains available.
+
+- Timeline prompt rewriting and review now run one segment at a time, with immediate incremental updates. Context is limited to the theme, current goal and required local evidence/constraints. Added standalone-description validation and invalidated old review fingerprints. Both H3 and natural-language compilation follow the same boundary.
+
+- Planning now returns available storyboards after partial failure. Compiled shots are saved before review; later batch, episode or review failures return existing work with a “Needs improvement” notice, reasons, suggestions and missing units/episodes. Source, material-slot, timeline and per-shot capacity checks remain active; shots are never duplicated to fill gaps. Cancellation or no valid shots still stops output. Notices persist with drafts and checkpoints. 302 backend and 29 frontend checks passed; no new cloud test was performed.
+
+- Fixed execution-model settings being misread as a conflict with neutral JSON output. Planning requests retain actual capability constraints without model-name or proprietary-syntax settings. Resolved input type, genre and treatment now stay consistent across stages. Brief ideas support creative completion, with a general audience when unspecified. Protocol misreadings get one targeted repair without discarding genuine conflicts or restarting the episode. Added five regressions; 286 related checks passed, with no new cloud calls.
+
+- AI planning treats total duration as a target, allowing changes needed for complete content, actions and dialogue. It no longer fails solely for exceeding the target or lacking enough shots to fill it; per-shot execution limits and user segment caps remain. The final 24-shot poetry response now compiles to 300.67 seconds offline; 128 planning/duration checks and 48 network/stage checks passed. Full cloud acceptance has not been rerun. The live-test runner now uses the production global network-wait timeout instead of separate 150-second request and 20-minute overall limits.
+
+- Fixed nested source-ID wrappers in material-free text-to-video planning. One layer of known ID strings is unwrapped without changing order or dropping sources. Self-reported source-format errors use one targeted repair rather than restarting the episode three times. Replayed the actual poetry-planning failures offline and added 11 regressions; unknown IDs, empty wrappers, deeper nesting and real requirement conflicts still fail. No new cloud requests were made.
+
+- Original media now use provider-issued model-bound temporary URLs and streamed uploads instead of repeated Base64 payloads. Removed local material/response size caps, text-length and input-count caps, and fixed model-name restrictions; legacy response budgets no longer block requests. Provider errors preserve their specific causes. Alibaba Cloud expires temporary media, while task exit releases local snapshots. 470 related regressions passed locally; private-material cloud testing was not performed in this run.
+
+- Added original-material input for the configured Qwen3.8-omni planning model. Images, audio and video use original bytes; TXT/MD files are uploaded to Alibaba Cloud Files, with verbatim text supplied to Omni without paraphrasing. Transfers are restricted to the task's selected list and authorized endpoint. Added source fingerprints, changed-material recovery checks, remote-document cleanup and complete Omni stream validation. Added 19 original-input regressions; 434 related backend checks passed. Full planning was exercised through a local HTTP mock; private-material cloud testing was not performed. See the [implementation and limitations (Chinese)](文档/技术实现/2026-10-07-规划素材原件发送.md).
+
+- Original-text understanding, chapter understanding and consolidation now select source IDs; the program restores actual ranges and verbatim quotations. Source field errors no longer masquerade as requirement conflicts, and persistent source errors stop after the existing single repair attempt rather than restarting episode planning. Runtime records include the loaded source protocol version and request diagnostics to distinguish saved UI data from accepted checkpoints. Real conflicts, source coverage and material validation remain enforced. Added 33 regressions; the latest related checks passed: 409 backend and 38 frontend. Actual failures were replayed offline without new paid requests; the real-model end-to-end run remains unverified. See the [fix and cache record (Chinese)](文档/技术实现/2026-10-07-多来源内容数量修复.md).
+
+- Fixed chapter understanding reporting its own empty source objects as requirement conflicts. Quotation examples and structured candidates now share actual source text; verified format misclassifications use the existing single repair attempt, while real conflicts and repeated failures still stop. Added 20 regressions; 362 related local checks passed, including replay of the actual failed response without new paid requests. Restart ComfyUI to load the backend fix. See the [fix record (Chinese)](文档/技术实现/2026-10-07-多来源内容数量修复.md).
+
+- Content summaries now select validated source IDs, with original quotations restored by the program; missing-shot errors identify the omitted units and content. Fixed false missing-lyrics errors caused by line breaks, slashes and punctuation in MV singing sections. Missing or altered words and reordered lyrics still fail, while ordinary dialogue and source-quotation checks retain their rules. Live testing reached 40 cumulative requests: replaying the first 12 shots passed backend validation after the fix, but the second batch and full semantic review remain untested. The latest 198 targeted regressions passed. See the [live-test and fix record (Chinese)](文档/技术实现/2026-10-07-多来源内容数量修复.md).
+
+- Music-video planning does not require a separate complete lyrics file. Lyrics in a storyboard may explain visuals and singer assignments; they need not all become mandatory dialogue. Added source checks for numbered performance sections from opening to ending, with empty mandatory-dialogue lists still allowed. Lossless text wrappers and original newline restoration are supported; fabricated quotes remain invalid. All 24 authorized live requests were used: full-text understanding and episode planning passed, but the complete workflow did not. Fixed summary failures incorrectly restarting local requirements analysis; all 441 related local planning regressions passed. See the [live-test and fix record (Chinese)](文档/技术实现/2026-10-07-多来源内容数量修复.md).
+
+- Fixed empty MV headings entering mandatory-dialogue candidates. Candidate extraction, structured output and backend validation now share nonempty-string and length rules; errors identify the unit/item, and long source speech is split without truncation. Invalid model responses are saved separately from accepted checkpoints. Added 16 regressions; 345 related planning checks passed. The real model has not been retested in this run. See the [fix record (Chinese)](文档/技术实现/2026-10-07-多来源内容数量修复.md).
+- Each generation now preserves a separate history archive. An equally sized Import Planning button restores the first episode, episode selection and four stage results. Data Management supports saving planning/plan JSON packages, automatic folder imports and deletion with two confirmations. Active and resumable projects are protected; shared packages include all episodes and associated planning archives, with new local access credentials on import.
+- Fixed chapter understanding mistaking text loaded in other ranges for missing uploads. Requests include an actual loaded-text inventory; explicit stage-boundary mistakes use the existing single repair attempt, while real missing inputs and content conflicts still stop planning. Added 6 regressions; 315 related backend checks passed. This new path has not yet been retested with the real model; see the [fix record (Chinese)](文档/技术实现/2026-10-07-多来源内容数量修复.md).
+- Aligned content-count contracts for multi-source planning. Structured output now receives each stage's unit limits; requirements-only ranges retain constraint units and source references, and count errors report the actual returned size. Added 13 targeted regressions; 309 related backend checks passed. See the [content-count fix record (Chinese)](文档/技术实现/2026-10-07-多来源内容数量修复.md) for real-model verification status.
+- All nine requirement cards passed real planning tests with the configured Qwen3.8 model. Fixed ordinary colon headings being mistaken for scripts, production instructions becoming mandatory dialogue, and missing shots in structured output. Tests used original synthetic text with automatic duration allocation (0), without uploading private materials. Related regressions passed: 296 backend and 407 frontend checks. See the [nine-type test record (Chinese)](文档/技术实现/2026-10-07-九类需求规划实测.md) for scope and limitations.
+- Corrected automatic planning review misclassifying reference-to-video media capabilities. Reviews now receive the independent image, video and audio slot rules plus backend validation results. Missing character identity references and actual continuity defects still require repair; review gates and retry limits remain intact.
+- Automatic reviews require verifiable source or field quotations, with actual short excerpts enumerated for the verified model. Generation difficulty, aesthetic preferences and previous errors are not current defects. Shot-only repairs retain the accepted content plan. Compiled prompts preserve existing actions, characters and camera instructions so singing assignments and POV requirements reach downstream stages.
+- Batch reviews restrict issue shot numbers to the current batch, preventing repaired ending issues from contaminating other batches. Series reviews receive actual per-shot durations and check the intersection of suggested durations and model limits, avoiding false conflicts for already valid allocations.
+- Restricted shot references and material-role filenames to actual uploaded files, with errors identifying the shot and unknown filenames. Aligned structured source limits, shot counts and review text lengths with the planning contract. Character and scene requirements are integrated into the script instead of creating additional introductions or repeated openings and endings.
+- Fixed episode planning returning more episodes than available source ranges. Episode limits now follow the actual range count, distinguishing lyric sections and shots from episodes while retaining complete source coverage and one targeted repair.
+- Added structured episode output for the verified DashScope Qwen3.8 planning model, constraining episode count, range-array length and actual IDs. Other models retain text instructions and backend validation. All 43 regression checks for that source-range fix passed.
+
+**2026-10-06**
+
+- Node segment cards split available height 1:1 between image and prompt areas. Prompt previews no longer stop at two lines; taller nodes show more text while preserving font size and line breaks.
+- Reordered the editor controls to Optimize prompt, Audit tags, Shared across segments, Clear materials, Disable soundtrack reference and Use source soundtrack. Sharing is indicated by the button's active state. Fixed Audit tags being hidden with the reference area in text-to-video mode.
+- Made the four AI Planning stage cards shorter and narrower while retaining progress and result access.
+- Preserved requirements input during planning. Total length 0 explicitly means automatic allocation, fixing false zero-duration conflicts; clarified real source-range constraints and episode-specific errors for long-form planning.
+- Automatically received generated videos and voice tracks enter production clips only, keeping AI Planning materials separate.
+- Updated both language guides for the four tabs and model configuration. The node-card change passed nine browser size checks and 71 related regression checks.
+
+**2026-10-05**
+
+- Refocused Video Production on editing and exporting generated results. It receives the final actual workflow video without duplicate first-pass/redraw imports; the first import sets the canvas, and voice plus sentence subtitles follow clip trims, order and enable state. Workflow generation, entities and standalone voice generation moved out; post-production, previews, recovery and backups remain.
+- Added shot purpose, performance, camera movement, spatial continuity, start/end states, reference roles and action timing, loaded by stage and content. Existing storyboards remain importable without forced story additions.
+- Added dependency-based incremental prompt updates: unchanged accepted segments are reused, while changed segments and affected neighbors are rewritten. Manual edits are protected, and retries use previous review suggestions.
+- Integrated 71 shot and genre rule sets into existing skills on demand, with scoped local-reference search, optional auxiliary images and target-video-model capability settings. Runtime skill text is separated from provenance; models are not downloaded automatically. See [shot design and incremental updates](文档/技术实现/2026-10-05-镜头设计增强与局部更新.md), [specialized rules](文档/技术实现/2026-10-05-七十一项专项融合与自动制作闭环.md) and [post-production changes](文档/技术实现/2026-10-05-视频制作后期调整说明.md) (Chinese).
+- Added editor prompt optimization using the same skill as timeline prompt generation. It rewrites from text, task type and actual first/last-frame bindings, replacing the current segment prompt only after validation.
+- Moved model selections for AI planning, timeline rewriting and editor prompt optimization into API Model Setup → AI 功能模型, with a saved choice for each function.
+- Fixed missing video soundtracks in the three reference task types and the `<Audio 1>` error when only a video with sound was uploaded; first-pass generation, redrawing, AI rewriting and reference tag lists now agree.
+- Shared video, paired soundtracks and standalone audio are cropped to each segment's time window. Video reads seek by presentation time, reducing repeated decoding and frame-cache memory.
+- Added mutually exclusive "禁用原声" and "原声输出" controls, with existing behavior preserved by default: disable soundtrack references and keep generated audio, or replace output with cropped source audio.
+- Source soundtrack output skips video-audio VAE encoding and generated-audio decoding, while keeping the required audio VAE input and joint audio/video sampling. Relevant automated regressions pass; GPU finished-video and timing comparisons remain unverified.
+
+**2026-10-04**
+
+- Replaced the AI Planning form with one requirements box and nine purpose cards, defaulting to automatic detection. Requirements support `@` material references, legacy plans retain their input, and stale results cannot overwrite newer edits. Four equal-width areas and a compact 3-by-3 purpose grid organize the page.
+- Added four result stages: source analysis, episode planning, reference generation and storyboarding. Actual completion unlocks content cards, episode lists, reference galleries and accepted storyboards; completed results remain available after stopping or failure.
+- Non-text-to-video tasks can optionally generate character, scene and prop references through a separately configured image API. Style, actual image observations and checkpoints are saved; completed images are reused, without automatic model switching or paid-request retries on failure.
+- Unified timeline rewriting under the general prompt rewriting skill and removed Skill and Auxiliary selectors. Story, dialogue, timing and material bindings stay fixed; rule checks and independent semantic review determine which results are written back.
+- Limited repairs to failed segments and one round, freezing accepted segments. Defaults are five segments per batch, at most four writing/review requests, 180 seconds per batch and 90 seconds per request. Timeouts, disconnections and stops preserve completed batches and original text elsewhere; repeated guide loading and review were reduced.
+- Removed the fixed overall long-form planning deadline while retaining network-wait timeouts, cumulative request budgets and revision limits. See the [purpose-card guide](文档/技术实现/2026-10-04-AI规划需求卡片.md), [reference-image guide](文档/技术实现/2026-10-04-AI规划自动参考图.md) and [rewriting timeout and stop rules](文档/技术实现/2026-10-04-提示词改写耗时与停止边界修复.md) (Chinese).
+
+**2026-10-03**
+
+- Added full-source range-by-range understanding, layered summaries, automatic episode planning and shared character/scene information for long text. Episodes cover the source in order and undergo whole-story review; summaries do not replace the original text.
+- Added persistent planning checkpoints, reconnection and compatible resume after restart, reusing saved results. Episode and whole-story reviews each allow up to three rounds; exhaustion preserves issues and checkpoints without replacing the draft. Cumulative request counts and access credentials persist with the project.
+- Combined generation and stopping in one button, clearing active progress immediately on stop. Episode switching preserves edits, and replanning retains the two most recent draft versions for recovery. Removed execution-backend and duplicate shot-duration controls from planning settings.
+- Added task/reference mapping checks, chapter/time/tag/dialogue rules, independent semantic review and local repairs to prompt rewriting. Text acceptance does not certify finished-video quality; the October 4 entry supersedes the original request limits.
+- Added the fourth tab, Video Production, and the Video Production Output node. The initial version supported actual media, generic workflows, voice/subtitles, composition previews, MP4 export, resumable tasks and ZIP project backups. On October 5 the production page was narrowed to editing generated results; use that day's guide for current controls.
+- Removed the separate on-screen subtitle field from the prompt timeline. Dialogue/narration supplies timing and spoken text; post-production subtitles are managed in Video Production, and disabling subtitles does not silence dialogue. See [long-form planning and recovery](文档/技术实现/2026-10-03-长剧自动规划与断点恢复.md) and [the initial production guide](文档/技术实现/2026-10-03-通用视频制作使用说明.md) (Chinese).
+
+**2026-10-02**
+
+- Added total-length 0 for automatic planning: actual duration accumulates from content-driven shot counts, actions and speech estimates rather than stretching to the default three minutes or filling the shot limit. The draft retains the automatic setting.
+- Added dialogue timing to the prompt timeline, with live slow/normal/fast estimates, speech rate, punctuation pauses, padding, minimum action duration and parallel/sequential action budgets. Long dialogue splits at sentence boundaries with balanced segment lengths.
+- Timing changes are previewed before confirmation and update only the draft and planning duration. Undo remains available until further editing, settings persist with the project, and Fill into node is still required before generation.
+- Existing recordings can be measured and previewed; recordings over 15 seconds require sentence-level SRT or JSON timestamps. Output can use actual source windows with silence padding at 24 fps, without guaranteeing generated lip synchronization. See [dialogue timing and voice alignment](文档/技术实现/2026-10-02-台词估时与配音对齐.md) (Chinese).
+
 **2026-10-01**
 
+- Introduced staged Chinese Skills for requirement routing, content understanding, batched shot planning and coverage checks. References are chosen from input and genre; planning Skill/Auxiliary selectors were removed, and receipts show the references actually used.
+- Planning first writes the clip draft with source ranges, character/scene information and required dialogue, leaving execution-node data unchanged until applied. Conflicts or failed reviews preserve the draft. The original long-text scope and recovery limits were superseded by full-source episodes and persistent checkpoints on October 3.
 - While AI prompts are being generated, the clip timeline is no longer frozen as a whole: scrolling, zooming, panning, dragging the playhead and opening a segment card to read it all work as usual — only the actions that change structure (trim, split, delete, drag-to-reorder, the enable switch, duration and subtitle editing, Fill Nodes) are un-clickable during generation.
 - Same change: the things that would have no effect if clicked during generation now dim out as well — the per-segment duration box, the three Skill/Auxiliary-style/Model dropdowns in the generate row, the "disable subtitles" switch and the drag handles at both ends of a card — so nothing looks clickable but does nothing.
 - Same change: each batch is written back and its segment cards refresh as soon as that batch finishes, so you can read the results while the remaining batches are still running.
@@ -681,7 +801,7 @@ Much of the design drew on the open-source H3 ecosystem and similar AI-video too
 
 ### Skills & knowledge-base material
 
-- **[MiniMax-H3知识库](https://github.com/MiniMax-AI/MiniMax-H3)** — the 9 style-skill docs and reference material bundled with the plugin, used by the clip timeline to "generate per-segment prompts in a given style". It is third-party material; copyright and content belong to its original authors.
+- Content-planning references are stored in `Skills/`; timeline rewriting methods are stored in `AI生成提示词/`. See [the Skills directory guide](Skills/目录说明.md) for its structure and usage rules.
 
 ### Libraries & tools we depend on
 

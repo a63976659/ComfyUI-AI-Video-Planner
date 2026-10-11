@@ -19,3 +19,9 @@ soundfile
 #
 # 开发期单测：pytest（ComfyUI 运行本身不需要）
 # pytest
+
+# 视频制作增强（可选，未安装时界面显示不可用，不会自动下载模型）
+# edge-tts               # 网络配音；生成时使用 Edge TTS 服务
+# faster-whisper         # 本地语音识别，模型放 models/whisper/<模型>/
+# imageio-ffmpeg         # 提供 ffmpeg；成片质检另需要 ffprobe 可执行文件
+# 完整 FFmpeg 需要 libx264、AAC、libass、中文字库；LVP_VIDEO_FONT 可指定标题字体。
