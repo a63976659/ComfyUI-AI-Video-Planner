@@ -149,10 +149,10 @@ def 默认配置() -> dict:
         "max_tokens": 4096,
         "timeout": 120,
         "verify_ssl": True,
-        "max_response_bytes": 2 * 1024 * 1024,   # 4阶段 B3：LLM 响应正文上限（默认 2MiB，可配）
         "llm_max_active": 2,                      # 4阶段 B2：进程级同时进行的 LLM 请求数上限
         "llm_max_queued": 4,                      # 4阶段 B2：超过活动数后允许排队的请求数上限，再超返回繁忙
         "api_models": _迁移模型清单({}),   # 统一模型清单：预设行物化可编辑（同参照插件 api_models）
+        "ai_model_selections": {"planning": "", "timeline": "", "editor": ""},
     }
 
 
@@ -171,7 +171,15 @@ def 读配置() -> dict:
         cfg["api_models"] = _净化模型清单(盘["api_models"])
     else:
         cfg["api_models"] = _迁移模型清单(盘)   # 旧盘：custom_models + 全局 api_key → 统一清单
+    cfg["ai_model_selections"] = _净化用途模型(cfg.get("ai_model_selections"), cfg["api_models"])
     return cfg
+
+
+def _净化用途模型(value, models):
+    value = value if isinstance(value, dict) else {}
+    ids = {m["id"] for m in models}
+    return {key: value.get(key) if isinstance(value.get(key), str) and value[key] in ids else ""
+            for key in ("planning", "timeline", "editor")}
 
 
 def 写配置(patch: dict) -> dict:
@@ -184,6 +192,7 @@ def 写配置(patch: dict) -> dict:
         if k == "api_models":
             v = _净化模型清单(v, 旧清单=cfg["api_models"])
         cfg[k] = v
+    cfg["ai_model_selections"] = _净化用途模型(cfg.get("ai_model_selections"), cfg["api_models"])
     cfg["api_key"] = _生效密钥(cfg)              # 生效密钥随选中模型条目派生（调用方 默认opener 零改动）
     目标 = 配置路径()
     临时 = f"{目标}.{os.getpid()}.{next(_临时序号)}.part"
@@ -247,6 +256,7 @@ def 取脱敏配置() -> dict:
         "base_url": cfg["base_url"], "model": cfg["model"],
         "temperature": cfg["temperature"], "max_tokens": cfg["max_tokens"],
         "timeout": cfg["timeout"], "verify_ssl": cfg["verify_ssl"],
+        "ai_model_selections": cfg["ai_model_selections"],
         # 统一模型清单（预设行 builtin=True）：逐条 has_key，绝不含 api_key 明文/掩码串
         "models": [{**{k: e[k] for k in ("id", "name", "base_url", "model", "builtin")},
                     "has_key": bool(e["api_key"])} for e in cfg["api_models"]],
@@ -322,7 +332,7 @@ class LLM错误(RuntimeError):
 def _分类HTTP(码: int):
     """HTTP 状态码 → (类别, 可重试, 建议响应状态码)。
     401/403＝鉴权失败、4xx＝参数/客户端错误：均不重试（同样的请求重试只会再错）。
-    429＝限流、5xx＝上游故障：暂态可重试。整单预算与总尝试≤2 在调用处再约束。"""
+    429＝限流、5xx＝上游故障：暂态可重试。总尝试≤2 在调用处再约束。"""
     if 码 in (401, 403):
         return "auth", False, 502
     if 码 == 429:
@@ -335,27 +345,17 @@ def _分类HTTP(码: int):
 
 
 def _读取限长(resp, 上限: int) -> bytes:
-    """响应正文规模上限（B3）：优先用 Content-Length 头在读前拒绝（不缓冲超大体），
-    无该头则读全后复核长度。read() 无参调用，兼容既有测试替身。超限抛 LLM错误(oversize)。"""
-    长度头 = getattr(resp, "getheader", lambda _k, _d=None: _d)("Content-Length")
-    if 长度头 is not None:
-        try:
-            if int(长度头) > 上限:
-                raise LLM错误(f"LLM 响应超过上限 {上限} 字节", 类别="oversize", 可重试=False, 状态码=502)
-        except (TypeError, ValueError):
-            pass
+    """保留旧调用签名，不再限制响应字节；服务端决定输出容量。"""
     原文 = resp.read()
     if isinstance(原文, str):
         原文 = 原文.encode("utf-8", errors="replace")
-    if len(原文) > 上限:
-        raise LLM错误(f"LLM 响应超过上限 {上限} 字节", 类别="oversize", 可重试=False, 状态码=502)
     return 原文
 
 
 class _LLM限流器:
     """进程级 LLM 并发闸（B2）：最多 活动 个请求同时发起，额外最多 排队 个等待，
     再超立刻判「繁忙」。名额在发起线程真正结束（finally）后才释放——不把客户端断开
-    误当后台已停。等待预算用尽（整单超时的剩余）也判繁忙，不无限阻塞。"""
+    误当后台已停。排队等待有独立预算，用尽也判繁忙，不扣除网络等待时间。"""
 
     def __init__(self, 活动: int = 2, 排队: int = 4):
         self._cv = threading.Condition()
@@ -396,6 +396,29 @@ class _LLM限流器:
                 self._活动 -= 1
             self._cv.notify()
 
+    async def 异步获取(self, 等待预算秒: float) -> bool:
+        """规划协程共用原有名额；取消等待立即退队，不遗留占位线程。"""
+        import asyncio
+        with self._cv:
+            if self._活动 < self._活动上限 and self._排队 == 0:
+                self._活动 += 1
+                return True
+            if self._排队 >= self._排队上限:
+                return False
+            self._排队 += 1
+        截止 = time.monotonic() + max(0, 等待预算秒)
+        try:
+            while time.monotonic() < 截止:
+                with self._cv:
+                    if self._活动 < self._活动上限:
+                        self._活动 += 1
+                        return True
+                await asyncio.sleep(min(0.05, max(0, 截止 - time.monotonic())))
+            return False
+        finally:
+            with self._cv:
+                self._排队 -= 1
+
     def 快照(self):
         with self._cv:
             return {"活动": self._活动, "排队": self._排队,
@@ -405,25 +428,25 @@ class _LLM限流器:
 _限流器 = _LLM限流器()
 
 
-def _退避(尝试: int, 截止: float):
-    """预算内的指数退避：第 0 次失败后等 0.5s、其后翻倍；不越过整单截止。"""
-    间隔 = min(0.5 * (2 ** 尝试), max(0.0, 截止 - time.monotonic()))
-    if 间隔 > 0:
-        time.sleep(间隔)
+def _退避(尝试: int):
+    """有界重试间的指数退避：第 0 次失败后等 0.5s、其后翻倍。"""
+    time.sleep(0.5 * (2 ** 尝试))
 
 
-def 造opener(覆盖=None):
+def 造opener(覆盖=None, 请求回调=None, 停止=None):
     """工厂：返回 (system,user)->str 的 opener；覆盖={'base_url','model','api_key'} 优先于配置盘
     （供 /lvp/plan 按前端所选模型临时切换，不写盘）；覆盖缺省或某键为 None → 回落配置盘对应值。
     urllib 标准库（无新依赖）。4阶段 B 请求治理：
-      · 整单超时预算：所有尝试共享 timeout 截止时间，单次 urlopen 只吃剩余（B1）。
-      · 错误分类重试：401/403/4xx 参数错误不重试；429/5xx/网络暂态在预算内退避重试，总尝试≤2（B1）。
-      · 响应正文上限：Content-Length 预检 + 读后复核，默认 2MiB 可配（B3）。
+      · 网络等待超时：每次 urlopen 使用 timeout 限制连接/阻塞读写等待，不限制整个任务耗时。
+      · 错误分类重试：401/403/4xx 参数错误不重试；429/5xx/网络暂态退避重试，总尝试≤2（B1）。
+      · 响应容量由模型服务判断；不按本地字节额度拦截（含旧配置额度）。
       · 并发名额：进程级最多 llm_max_active 活动 + llm_max_queued 排队，超限/等待超时抛繁忙（B2）。
       · 结构化异常：统一抛 LLM错误（含 类别/可重试/状态码/请求ID），供路由定 HTTP 状态（B4）。"""
     覆盖 = 覆盖 if isinstance(覆盖, dict) else {}
 
     def opener(system: str, user: str) -> str:
+        if 停止 is not None and 停止():
+            raise LLM错误("LLM 请求已停止", 类别="cancelled", 状态码=409)
         cfg = 读配置()
         base = str(覆盖.get("base_url") or cfg.get("base_url") or "").rstrip("/")
         model = str(覆盖.get("model") or cfg.get("model") or "").strip()
@@ -444,30 +467,28 @@ def 造opener(覆盖=None):
         url = f"{base}/chat/completions"
         ctx = _ssl上下文(cfg, url)
 
-        整单超时 = _整数配置(cfg, "timeout", 120, 下限=1)
-        响应上限 = _整数配置(cfg, "max_response_bytes", 2 * 1024 * 1024)
-        if 响应上限 <= 0:
-            响应上限 = 2 * 1024 * 1024                # 可配：原样尊重配置值（含测试小阈值），仅非正回落默认
+        网络超时 = _整数配置(cfg, "timeout", 120, 下限=1)
+        响应上限 = None  # 旧配置中的max_response_bytes不再产生本地拦截。
         _限流器.设置上限(_整数配置(cfg, "llm_max_active", 2, 下限=1),
                     _整数配置(cfg, "llm_max_queued", 4, 下限=0))
-        截止 = time.monotonic() + 整单超时
 
         # B2 并发名额：拿不到（队列满或等待超时）→ 繁忙 503，不占线程也不发网络
-        if not _限流器.获取(截止 - time.monotonic()):
+        if not _限流器.获取(网络超时):
             raise LLM错误("LLM 请求已达并发上限，请稍后重试", 类别="busy",
                           可重试=True, 状态码=503, 请求ID=请求ID)
         try:
             最后错 = None
             for 尝试 in range(2):                       # 总尝试 ≤2（B1）
-                剩 = 截止 - time.monotonic()
-                if 剩 <= 0:                             # 整单预算耗尽，不再发起
-                    break
+                if 停止 is not None and 停止():
+                    raise LLM错误("LLM 请求已停止", 类别="cancelled", 状态码=409, 请求ID=请求ID)
                 req = urllib.request.Request(url, data=body, headers=头, method="POST")
                 if 键:
                     # 凭据走不随重定向携带头：跨目标重定向丢弃，防误发新址（同 测连通性）
                     req.add_unredirected_header("Authorization", f"Bearer {键}")
                 try:
-                    with urllib.request.urlopen(req, timeout=剩, context=ctx) as resp:
+                    if 请求回调 is not None:
+                        请求回调()
+                    with urllib.request.urlopen(req, timeout=网络超时, context=ctx) as resp:
                         原文 = _读取限长(resp, 响应上限)                 # B3
                     数据 = json.loads(原文.decode("utf-8"))
                     # content 优先、空则回落 reasoning_content（思考模型可能 content 为空）。
@@ -481,18 +502,18 @@ def 造opener(覆盖=None):
                     if not 可重试 or 尝试 == 1:
                         raise LLM错误(f"LLM 调用失败：{_错误摘要(e)}", 类别=类别,
                                       可重试=可重试, 状态码=码, 请求ID=请求ID) from e
-                    _退避(尝试, 截止)
+                    _退避(尝试)
                 except (TimeoutError, urllib.error.URLError) as e:
                     # 网络暂态 / 连接拒 / DNS / 读超时（socket.timeout 是 TimeoutError 别名）：可重试
                     最后错 = e
                     if 尝试 == 1:
                         raise LLM错误(f"LLM 调用失败（暂态）：{_错误摘要(e)}", 类别="network",
                                       可重试=True, 状态码=502, 请求ID=请求ID) from e
-                    _退避(尝试, 截止)
+                    _退避(尝试)
                 except ValueError as e:                  # JSON 解析失败＝模型输出问题，重试无意义
                     raise LLM错误(f"LLM 响应解析失败：{e}", 类别="parse",
                                   可重试=False, 状态码=502, 请求ID=请求ID) from e
-            # 预算耗尽或二次仍失败：以暂态失败收尾
+            # 防御性收尾；正常的二次失败已在上面按类别抛出。
             raise LLM错误(f"LLM 调用失败：{_错误摘要(最后错)}", 类别="network",
                           可重试=True, 状态码=502, 请求ID=请求ID)
         finally:

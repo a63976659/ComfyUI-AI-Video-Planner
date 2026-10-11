@@ -18,14 +18,18 @@ try:                                        # ComfyUI 运行时（以包形式�
     from ..规划.规划器 import 规划
     from ..规划.配置 import 默认opener, 造opener, 读配置, 取脱敏配置, 写配置, 测连通性, LLM错误
     from ..规划.方法论 import PLATFORM_HINTS, HOOK_TYPES, ROLE_COLORS
-    from ..规划.知识库 import 风格选项, 辅助风格选项, 技能选项
-    from ..规划.提示词生成 import 分批生成提示词, 目标索引, 默认批大小
+    from ..规划.知识库 import 风格选项, 辅助风格选项, 技能选项, 通用改写技能, 规范改写技能
+    from ..规划.提示词生成 import 分批生成提示词, 目标索引
+    from ..规划.改写请求 import 造改写opener, 每批耗时上限, 单次请求上限
+    from .规划任务路由 import 注册规划任务路由
 except ImportError:                         # pytest（插件根在 sys.path，`..` 越界）
     from 规划.规划器 import 规划
     from 规划.配置 import 默认opener, 造opener, 读配置, 取脱敏配置, 写配置, 测连通性, LLM错误
     from 规划.方法论 import PLATFORM_HINTS, HOOK_TYPES, ROLE_COLORS
-    from 规划.知识库 import 风格选项, 辅助风格选项, 技能选项
-    from 规划.提示词生成 import 分批生成提示词, 目标索引, 默认批大小
+    from 规划.知识库 import 风格选项, 辅助风格选项, 技能选项, 通用改写技能, 规范改写技能
+    from 规划.提示词生成 import 分批生成提示词, 目标索引
+    from 规划.改写请求 import 造改写opener, 每批耗时上限, 单次请求上限
+    from 后端路由.规划任务路由 import 注册规划任务路由
 
 _已注册 = False
 _任务码 = ["t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v"]
@@ -91,6 +95,10 @@ def _校验流式请求(body):
     ok, err = _校验segments(body)
     if not ok:
         return ok, err
+    try:
+        规范改写技能(body.get("风格技能"))
+    except ValueError as e:
+        return False, str(e)
     ids = body.get("目标段ids")
     if ids is not None and (not isinstance(ids, list) or not ids
                             or not all(isinstance(x, str) and x.strip() for x in ids)):
@@ -98,6 +106,22 @@ def _校验流式请求(body):
     批 = body.get("批大小")
     if 批 is not None and (isinstance(批, bool) or not isinstance(批, int) or not (1 <= 批 <= 20)):
         return False, "批大小须为 1..20 的整数"
+    资料 = body.get("改写资料")
+    if 资料 is not None:
+        if not isinstance(资料, dict):
+            return False, "改写资料须为对象"
+        for key in ("制作", "规划资料", "执行参考", "素材理解"):
+            if key in 资料 and not isinstance(资料[key], dict):
+                return False, f"改写资料的{key}须为对象"
+        if "素材" in 资料 and not isinstance(资料["素材"], list):
+            return False, "改写资料的素材须为数组"
+        if "执行提示词" in 资料 and not isinstance(资料["执行提示词"], str):
+            return False, "改写资料的执行提示词须为字符串"
+        制作 = 资料.get("制作", {})
+        if "实体" in 制作 and (not isinstance(制作["实体"], list) or not all(isinstance(e, dict) for e in 制作["实体"])):
+            return False, "改写资料的制作实体须为对象数组"
+        if "镜头" in 制作 and (not isinstance(制作["镜头"], dict) or not all(isinstance(s, dict) for s in 制作["镜头"].values())):
+            return False, "改写资料的制作镜头须为对象映射"
     return True, None
 
 
@@ -119,14 +143,18 @@ def _plan_meta() -> dict:
     }
 
 
-def _解析模型覆盖(body):
+def _解析模型覆盖(body, 用途="planning"):
     """纯函数：pop body['模型id'] → 在配置盘 api_models 按 id 命中返回 {base_url,model,api_key}；
-    未带或未命中 → None（回落配置盘默认模型）。命中条 api_key 空串＝该模型确无 Key（opener 不加 Authorization）。
+    未带时读取指定用途的已保存选择；未选择或未命中 → None（回落配置盘默认模型）。
+    命中条 api_key 空串＝该模型确无 Key（opener 不加 Authorization）。
     pop 副作用保证 模型id 不入 规划(brief) 的提示词构建。"""
+    cfg = 读配置()
     mid = str((body or {}).pop("模型id", "") or "").strip()
     if not mid:
+        mid = (cfg.get("ai_model_selections") or {}).get(用途, "")
+    if not mid:
         return None
-    for e in 读配置().get("api_models") or []:
+    for e in cfg.get("api_models") or []:
         if e.get("id") == mid:
             return {"base_url": e.get("base_url", ""), "model": e.get("model", ""),
                     "api_key": e.get("api_key", "")}
@@ -137,7 +165,7 @@ def _错误响应(e):
     """纯函数：异常 → (响应体, HTTP 状态)。LLM错误 携结构化的 可重试/请求ID/状态码，
     路由不再靠中文异常子串判定 HTTP 状态（B4）；其余 RuntimeError → 500（统一 {error} 结构）。"""
     if isinstance(e, LLM错误):
-        return {"error": str(e), "retryable": e.可重试, "requestId": e.请求ID}, e.状态码
+        return {"error": str(e), "retryable": e.可重试, "requestId": e.请求ID, "category": e.类别}, e.状态码
     return {"error": str(e)}, 500
 
 
@@ -147,6 +175,10 @@ def 注册路由():
         return
     from server import PromptServer
     routes = PromptServer.instance.routes
+
+    注册规划任务路由(routes, _解析模型覆盖, app=getattr(PromptServer.instance, "app", None))
+    from .专项配置路由 import 注册专项配置路由
+    注册专项配置路由(routes)
 
     @routes.post("/lvp/plan")
     async def 规划接口(request):
@@ -170,6 +202,48 @@ def 注册路由():
             logging.exception("[长视频规划师] /lvp/plan 未预期错误")   # 保留 traceback 便于服务端排查（客户端仅得摘要）
             return web.json_response({"error": f"规划失败：{e}"}, status=500)
 
+    @routes.post("/lvp/prompt/optimize")
+    async def 编辑提示词优化接口(request):
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            return web.json_response({"error": "请求体不是合法 JSON"}, status=400)
+        ok, err = _校验流式请求(body)
+        if not ok or len(body["segments"]) != 1:
+            return web.json_response({"error": err or "提示词优化只接受当前一段"}, status=400)
+        if not str(body["segments"][0].get("prompt") or "").strip():
+            return web.json_response({"error": "请先填写当前段提示词"}, status=400)
+        覆盖 = _解析模型覆盖(body, "editor")
+        停止 = threading.Event()
+
+        def worker():
+            return 分批生成提示词(
+                body.get("brief") if isinstance(body.get("brief"), dict) else {},
+                body["segments"], 造改写opener(覆盖, 停止=停止.is_set),
+                批大小=1, 技能=通用改写技能, 资料=body.get("改写资料"),
+                禁用字幕=body.get("禁用字幕") is True, 停止=停止.is_set)
+
+        任务 = asyncio.get_running_loop().run_in_executor(None, worker)
+        _后台任务.add(任务)
+        任务.add_done_callback(_后台任务.discard)
+        try:
+            result = await asyncio.shield(任务)
+            seg = result["segments"][0]
+            report = seg.get("提示词生成") or {}
+            if report.get("完成") is not True:
+                return web.json_response({"error": "；".join(report.get("问题") or ["提示词生成失败，已保留原文"])}, status=422)
+            return web.json_response({"prompt": seg["prompt"], "提示词生成": report, "调用": result["调用"]})
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        except RuntimeError as e:
+            payload, status = _错误响应(e)
+            return web.json_response(payload, status=status)
+        except Exception as e:
+            logging.exception("[长视频规划师] 提示词优化未预期错误")
+            return web.json_response({"error": f"提示词优化失败：{e}"}, status=500)
+        finally:
+            停止.set()
+
     @routes.post("/lvp/plan/prompts/stream")
     async def 提示词流式接口(request):
         """A6 分批流式：每批一条 SSE batch 事件（含段副本与逐段状态），结尾 done/fatal。
@@ -184,10 +258,9 @@ def 注册路由():
         ok, err = _校验流式请求(body)
         if not ok:
             return web.json_response({"error": err}, status=400)
-        覆盖 = _解析模型覆盖(body)   # pop 模型id → 按所选模型临时切换 opener（不写盘），同 /lvp/plan
+        覆盖 = _解析模型覆盖(body, "timeline")
         禁用字幕 = body.get("禁用字幕") is True
-        opener = 造opener(覆盖) if 覆盖 else 默认opener
-        批大小 = body.get("批大小") or 默认批大小
+        批大小 = 1  # 旧请求参数仍校验，实际逐段执行
         目标段数 = len(目标索引(body["segments"], body.get("目标段ids")))
         总批数 = max(1, ceil(目标段数 / 批大小))   # 与 分批生成提示词 同走 目标索引，未知/重复 id 不再把分母撑大
         loop = asyncio.get_running_loop()
@@ -196,28 +269,42 @@ def 注册路由():
 
         def worker():
             逐段状态 = {}
+            请求数 = 0
+            当前进度 = {"阶段": "改写提示词", "批次": 1, "总批数": 总批数, "修复轮次": 0}
 
             def 发(项):
                 loop.call_soon_threadsafe(队列.put_nowait, 项)
 
             def 回调(k, 段批, 批状态):
                 发(("batch", {"index": k, "segments": 段批, "promptStatus": 批状态}))
+                当前进度["批次"] = k + 2
+
+            def 阶段进度(p):
+                当前进度.update(p)
+                发(("progress", {**当前进度, "调用": 请求数}))
+
+            def 真实请求():
+                nonlocal 请求数
+                请求数 += 1
+                发(("progress", {**当前进度, "调用": 请求数}))
 
             try:
+                opener = 造改写opener(覆盖, 请求回调=真实请求, 停止=停止.is_set)
                 结果 = 分批生成提示词(
                     body.get("brief") if isinstance(body.get("brief"), dict) else {},
                     body["segments"], opener,
                     目标ids=body.get("目标段ids"), 批大小=批大小,
-                    技能=str(body.get("风格技能") or "不指定"),
-                    辅助=str(body.get("辅助风格") or "无"),
+                    技能=通用改写技能,
                     状态=逐段状态, 禁用字幕=禁用字幕,
-                    每批回调=回调, 停止=停止.is_set)
+                    每批回调=回调, 停止=停止.is_set,
+                    资料=body.get("改写资料"), 进度=阶段进度)
             except BaseException as e:   # 含 每批回调/编排逃逸：必须补一帧终止，队列消费侧才能收尾
+                logging.exception("[长视频规划师] 提示词时间轴失败 requestId=%s category=%s", getattr(e, "请求ID", ""), getattr(e, "类别", "unknown"))
                 载荷, _码 = _错误响应(e) if isinstance(e, RuntimeError) else ({"error": str(e)}, 500)
                 发(("fatal", 载荷))
                 return
             发(("done", {"promptStatus": 逐段状态, "degraded": 结果["降级"],
-                         "stopped": 停止.is_set()}))
+                         "stopped": 停止.is_set(), "调用": 请求数}))
 
         任务 = loop.run_in_executor(None, worker)
         _后台任务.add(任务)
@@ -229,9 +316,21 @@ def 注册路由():
             "X-Accel-Buffering": "no"})
         try:
             await resp.prepare(request)
-            await resp.write(_sse("meta", {"总批数": 总批数, "批大小": 批大小}))
+            await resp.write(_sse("meta", {"总批数": 总批数, "批大小": 批大小,
+                                          "每批调用上限": 1, "每批秒数上限": 每批耗时上限}))
+            截止 = loop.time() + 总批数 * 每批耗时上限 + 单次请求上限 + 15
             while True:
-                名, 载荷 = await 队列.get()
+                transport = getattr(request, "transport", None)
+                if transport is not None and transport.is_closing():
+                    break
+                if loop.time() >= 截止:
+                    await resp.write(_sse("fatal", {"error": "提示词改写已达任务耗时上限，自动停止；已有完成段保留。"}))
+                    break
+                try:
+                    名, 载荷 = await asyncio.wait_for(队列.get(), timeout=2)
+                except asyncio.TimeoutError:
+                    await resp.write(_sse("heartbeat", {}))
+                    continue
                 await resp.write(_sse(名, 载荷))
                 if 名 in ("fatal", "done"):
                     break

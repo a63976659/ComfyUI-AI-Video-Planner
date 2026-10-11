@@ -13,7 +13,7 @@ import re
 from .方法论 import (
     MIN_SEG, MAX_SEG, HOOK_TYPES, PLATFORM_HINTS, 角色配色,
 )
-from .知识库 import load_skill_docs, load_skills_docs, H3_SKILL_FOLDERS, 技能选项, 任务类型映射
+from .知识库 import load_skills_docs, 技能选项
 
 # ```json ... ``` 或 ``` ... ``` 代码块（非贪婪，DOTALL）
 _代码块re = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
@@ -88,19 +88,11 @@ def _候选(text: str):
         yield text[i:j + 1]
 
 
-# 知识库注入指令：知识库文档为交互式智能体而写（含分步确认/选项卡/多轮问答），规划器是一次性
-# JSON 输出，故显式要求只取视觉/镜头/提示词规范，忽略交互流程，最终仍只输出 segments JSON。
-_KB注入指令 = (
-    "\n\n以下是 MiniMax H3 知识库文档（附在用户消息中），请提取其中的视觉风格、镜头语言、"
-    "画面规范与提示词写法，用于撰写每段的「画面」字段，使各段画面贴合所选技能的风格。"
-    "务必忽略文档中面向交互式智能体的分步确认流程、选项卡、多轮问答与制作清单，"
-    "不要输出这些流程或询问用户；最终仍严格只输出上述 segments JSON，不要任何解释文字。"
-)
 _KB融合说明 = (
     "\n文档中标注「(辅助风格)」的技能说明仅供借鉴融合其手法与风格要素，"
     "各段画面的主体风格、结构与规范仍按主风格技能输出。"
 )
-# Skills 技能注入指令：措辞同 _KB注入指令 但不绑定 MiniMax H3 知识库名义（该支技能源为根目录 Skills/）
+# 旧规划入口仅加载 Skills 的模型无关规划资料，不调用时间轴改写技能。
 _技能注入指令 = (
     "\n\n以下是用户指定技能的技能文档（附在用户消息中），请提取其中的视觉风格、镜头语言、"
     "画面规范与提示词写法，用于撰写每段的「画面」字段，使各段画面贴合所选技能的风格。"
@@ -184,7 +176,7 @@ def _读取文本素材(清单: list, 回执: dict = None) -> str:
 
 def 构建提示词(brief: dict, 回执: dict = None) -> tuple:
     """返回 (system, user)（设计 §7.1）。brief 缺失字段用默认兜底；主题必填校验在路由侧。
-    选了「风格技能」时把对应 MiniMax-H3知识库 文档注入，令每段「画面」按该技能视觉/镜头/提示词规范撰写。
+    旧技能参数仅允许指定 Skills 规划资料；不注入时间轴的提示词改写知识库。
     可选 回执 dict（A5）：传入时把知识库装配回执（included/truncated/skipped/missing）写入 回执["知识库"]，
     供上层回显「实际进入请求的来源 / 截断 / 缺失」；不传则行为与旧完全一致。"""
     brief = brief if isinstance(brief, dict) else {}
@@ -199,7 +191,6 @@ def 构建提示词(brief: dict, 回执: dict = None) -> tuple:
     调性 = PLATFORM_HINTS.get(平台, PLATFORM_HINTS["通用"])
     风格技能 = str(brief.get("风格技能") or "不指定").strip()
     辅助风格 = str(brief.get("辅助风格") or "无").strip()
-    默认任务 = str(brief.get("默认任务") or "t2v").strip()
     每段建议时长 = str(brief.get("每段建议时长") or "").strip()   # 范围字符串如 "5-8"，仅供 LLM 控制分镜节奏，不参与校验归一
     详细内容 = str(brief.get("详细内容") or "").strip()
     清单 = _素材清单(brief)
@@ -209,7 +200,7 @@ def 构建提示词(brief: dict, 回执: dict = None) -> tuple:
         "依据用户 brief 产出多段分镜时间轴。严格只输出 JSON，不要任何解释文字。"
         'JSON 结构固定为：{"segments":[{"职能":"钩子|开场|建立|展开|递进|案例|实证|讲解|冲突|蓄势|悬念|过渡|高潮|反转|回落|余韵|总结|结尾|预告|CTA",'
         '"标题":"段标题/章节名","画面":"画面描述（主体/动作/镜头/光线/氛围）",'
-        '"字幕":"台词或字幕文案","情绪":"情绪曲线标注","钩子":"仅首段填钩子类型","时长":整数秒}]}。'
+        '"台词":"本段需要朗读的台词或旁白，无朗读则为空","情绪":"情绪曲线标注","钩子":"仅首段填钩子类型","时长":整数秒}]}。'
         '素材相关为可选：段内可加 "使用素材":["素材名"]，顶层可加 "全局素材":["素材名"]，只能逐字引用「可用素材」清单中的名称。'
         "画面描述只写视觉内容，不要添加分辨率、像素尺寸或画幅比例等输出参数。"
         f"每段时长必须在 {MIN_SEG}-{MAX_SEG} 秒之间；首段职能必须是「钩子」；"
@@ -217,6 +208,8 @@ def 构建提示词(brief: dict, 回执: dict = None) -> tuple:
         "中段职能按内容从枚举择优（长视频多用 展开/讲解/案例/实证/蓄势/悬念/过渡/回落/余韵/总结/预告），"
         "除内容确有需要外避免连续多段重复同一职能。"
     )
+    from .规划默认规则 import 规划默认规则, 声音输出要求
+    system += 规划默认规则 + 声音输出要求.replace("对白或旁白", "台词").replace("无对白、旁白", "无台词")
     user = (
         f"主题：{主题}\n平台：{平台}\n平台调性：{调性}\n"
         f"总时长：{总时长}秒\n语言：{语言}\n"
@@ -225,7 +218,7 @@ def 构建提示词(brief: dict, 回执: dict = None) -> tuple:
         + (f"段数上限：{段数上限}\n" if 段数上限 else "")
         + (f"每段建议时长：{每段建议时长}秒，各段时长在此范围内按需浮动，用于控制分镜节奏\n" if 每段建议时长 else "")
         + f"默认钩子类型：{钩子类型}\n"
-        + f"请用{语言}产出每段的 标题/字幕/画面。严格输出 JSON，不要多余文字。"
+        + f"请用{语言}产出每段的 标题/台词/画面。台词属于声音，不是屏幕文字。严格输出 JSON，不要多余文字。"
     )
     if 详细内容:
         user += f"\n\n## 详细要求\n{详细内容}"
@@ -241,22 +234,8 @@ def 构建提示词(brief: dict, 回执: dict = None) -> tuple:
 
     # 知识库注入（仅当选中具体技能）：加载失败优雅降级为无知识库，不让整次规划失败
     是Skills技能 = 风格技能 != "不指定" and 风格技能 in 技能选项()
-    if not 是Skills技能 and 风格技能 in H3_SKILL_FOLDERS:
-        try:
-            文档, _文件, 知识库回执 = load_skill_docs(风格技能, 任务类型映射(默认任务), 辅助风格)
-        except (FileNotFoundError, ValueError, OSError) as e:
-            logging.warning("[长视频规划师] 知识库加载失败，按无知识库降级：%s", e)
-            文档 = ""
-            知识库回执 = {"error": str(e)}
-        if isinstance(回执, dict):
-            回执["知识库"] = 知识库回执
-        if 文档:
-            system += _KB注入指令
-            if 辅助风格 != "无":
-                system += _KB融合说明
-            user += f"\n\n知识库文档（供撰写每段画面参考）:\n{文档}"
-    elif 是Skills技能:
-        # brief「技能/辅助」源＝根目录 Skills/，同名时优先 Skills；仅未命中 Skills 的旧 KB 技能名走上支。
+    if 是Skills技能:
+        # 仅保留 Skills 独立规划资料。
         # ⚠️ 技能选项() 恒含「不指定」（=不注入技能，走通用分镜），须先排除，否则「不指定」会误入本支
         #    去 load_skills_docs("不指定")，Skills/ 不存在时每次规划都打 WARNING 噪声。
         try:
@@ -313,7 +292,7 @@ def _分配时长(总时长: int, N: int) -> list:
 _段数组键 = ("segments", "shots", "scenes", "clips", "分镜", "片段", "镜头", "结果",
              "result", "data", "plan", "时间轴", "timeline", "content", "items")
 # 单个段对象的特征键（判断一个 dict 是否「本身就是一段」）
-_段特征键 = ("画面", "prompt", "description", "职能", "role", "标题", "title", "字幕", "subtitle")
+_段特征键 = ("画面", "prompt", "description", "职能", "role", "标题", "title", "台词", "dialogue", "narration")
 
 
 def _取(d: dict, *键):
@@ -429,10 +408,17 @@ def 校验归一(segments, brief: dict, 诊断: dict = None) -> list:
             "职能": 职能,
             "职能色": 角色配色(职能),                 # §6.3.6 后端查表写入
             "标题": str(_取(raw, "标题", "title", "name")),
-            "字幕": str(_取(raw, "字幕", "subtitle", "caption", "台词", "text")),
+            "台词": str(_取(raw, "台词", "dialogue", "narration")),
+            "台词参与估时": bool(str(_取(raw, "台词", "dialogue", "narration")).strip()),
             "情绪": str(_取(raw, "情绪", "emotion", "mood")),
             "钩子": 钩子,
         }
+        if "声音设计" in raw:
+            from .镜头设计 import 校验镜头设计
+            design = 校验镜头设计({"台词": d["台词"], "声音设计": raw["声音设计"]})
+            d["镜头资料"] = design
+            if design.get("声音设计"):
+                d["prompt"] += "\n声音设计（配音表演说明，不朗读）：" + json.dumps(design["声音设计"], ensure_ascii=False)
         用 = []
         if isinstance(raw.get("使用素材"), list):  # 非 list 视同缺省，与顶层 全局素材 同口径
             for x in raw["使用素材"]:

@@ -136,7 +136,9 @@ def _过滤段refs(段组, 池: set, 缺失: list):
         refs = 段.get("refs")
         if not isinstance(refs, dict):
             continue
-        for v in refs.values():
+        for key, v in refs.items():
+            if key == "视频音频模式":
+                continue
             if isinstance(v, str):
                 if v and v not in 池:
                     缺失.append(v)
@@ -144,6 +146,11 @@ def _过滤段refs(段组, 池: set, 缺失: list):
                 for 名 in v:
                     if isinstance(名, str) and 名 and 名 not in 池:
                         缺失.append(名)
+        配 = refs.get("台词配音")
+        if isinstance(配, dict):
+            名 = 配.get("文件名")
+            if isinstance(名, str) and 名 and 名 not in 池:
+                缺失.append(名)
     return 段组
 
 

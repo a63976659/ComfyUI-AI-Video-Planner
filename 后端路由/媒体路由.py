@@ -15,6 +15,7 @@ IO 失败 5xx JSON。此处**不套** Task 11 UI 边界的 ValueError-only 契�
 因版本而异。入口靠 `request.content_type` 属性前置拦截（HeadersMixin，缺失时按 RFC 2616
 回退 `application/octet-stream`，不抛 KeyError），不依赖 aiohttp 版本内部实现。"""
 import contextlib
+import asyncio
 import hashlib
 import itertools
 import os
@@ -84,6 +85,25 @@ def 媒体根() -> str:
     return root
 
 
+def 参考标签列表(refs, root):
+    try:
+        from ..执行.参考素材 import 解析槽位, 探测参考音轨, 参考标签槽位, 视频音频模式
+    except ImportError:
+        from 执行.参考素材 import 解析槽位, 探测参考音轨, 参考标签槽位, 视频音频模式
+    slots = 解析槽位(refs)
+    for name in slots["视频"]:
+        path = os.path.realpath(os.path.join(root, name))
+        if os.path.commonpath([os.path.realpath(root), path]) != os.path.realpath(root):
+            raise ValueError("参考视频必须位于媒体目录内")
+    flags = 探测参考音轨(slots, root)
+    result = 参考标签槽位(slots, flags)
+    count = sum(flags)
+    suffix = "（视频音轨）" if 视频音频模式(refs) == "默认" else "（视频音轨，已禁用参考）"
+    result["音频"] = [name + suffix if i < count else name
+                      for i, name in enumerate(result["音频"])]
+    return result
+
+
 def 注册路由():
     """幂等注册 aiohttp 路由（供 __init__.py 调用）。"""
     global _已注册
@@ -91,6 +111,17 @@ def 注册路由():
         return
     from server import PromptServer
     routes = PromptServer.instance.routes
+
+    @routes.post("/lvp/media/reference_labels")
+    async def 参考标签(request):
+        try:
+            refs = await request.json()
+            result = await asyncio.to_thread(参考标签列表, refs, 媒体根())
+            return web.json_response(result)
+        except (ValueError, TypeError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except OSError as exc:
+            return web.json_response({"error": str(exc)}, status=500)
 
     @routes.get("/lvp/media/list")
     async def 媒体列表(request):

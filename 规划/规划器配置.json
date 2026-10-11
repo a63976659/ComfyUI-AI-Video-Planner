@@ -6,7 +6,6 @@
   "max_tokens": 4096,
   "timeout": 600,
   "verify_ssl": true,
-  "max_response_bytes": 2097152,
   "llm_max_active": 2,
   "llm_max_queued": 4,
   "api_models": [
@@ -41,6 +40,19 @@
       "model": "qwen3.8-omni-flash",
       "builtin": false,
       "api_key": "sk-ws-H.PRIIHXM.siDd.MEUCIF8hEErtzQPeU22Abc3c4oCLN8LGCqqkYmOxeziLXrRXAiEAkoW33uSMJNmr795aaotnW74dKIwTnBWrdDK00v4pSYc"
+    },
+    {
+      "id": "custom_42464_0",
+      "name": "DeepSeek",
+      "base_url": "https://api.deepseek.com",
+      "model": "deepseek-flash",
+      "builtin": false,
+      "api_key": "sk-64350be0d74c43b5b860e58eed0d00db"
     }
-  ]
+  ],
+  "ai_model_selections": {
+    "planning": "custom_42464_0",
+    "timeline": "custom_42464_0",
+    "editor": "custom_42464_0"
+  }
 }
