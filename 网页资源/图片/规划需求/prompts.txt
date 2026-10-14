@@ -1,0 +1,41 @@
+# 规划需求卡片封面提示词
+
+生成方式：内置 image_gen。工具未开放具体型号参数；不声称指定 image-2.5。
+全部资产逐张独立生成；统一 3:2 横向构图；无文字、无品牌、无水印。
+
+## auto.png
+
+Use case: stylized-concept. Asset type: horizontal cover for a small video-planning choice card, a standalone image. Style: exquisite minimal cinematic miniature still-life, polished 3D realism, quiet slate-blue studio background, soft warm side light, subtle cool fill, refined tactile materials. Composition: landscape 3:2, centered recognizable hero subject, three-quarter camera, strong clean silhouette readable at tiny size, generous breathing room, no busy details. Constraints: no typography, no readable lettering, no UI, no logos, no brands, no watermark, no frames. Subject: A gently curved strip of dark cinema film forms an elegant loop beside one glowing warm sphere of inspiration. Perforated film edges, a few restrained luminous specks, a simple sculptural metaphor for a creative idea becoming cinema.
+
+## novel.png
+
+Use case: stylized-concept. Asset type: horizontal cover for a small video-planning choice card, a standalone image. Style: exquisite minimal cinematic miniature still-life, polished 3D realism, quiet slate-blue studio background, soft warm side light, subtle cool fill, refined tactile materials. Composition: landscape 3:2, centered recognizable hero subject, three-quarter camera, strong clean silhouette readable at tiny size, generous breathing room, no busy details. Constraints: no typography, no readable lettering, no UI, no logos, no brands, no watermark, no frames. Subject: An open ivory hardcover book on a low clean pedestal. A tiny poetic mountain landscape with a winding river rises naturally from the two blank pages. The book and miniature landscape are one clear centerpiece.
+
+## script.png
+
+Use case: stylized-concept. Asset type: horizontal cover for a small video-planning choice card, a standalone image. Style: exquisite minimal cinematic miniature still-life, polished 3D realism, quiet slate-blue studio background, soft warm side light, subtle cool fill, refined tactile materials. Composition: landscape 3:2, centered recognizable hero subject, three-quarter camera, strong clean silhouette readable at tiny size, generous breathing room, no busy details. Constraints: no typography, no readable lettering, no UI, no logos, no brands, no watermark, no frames. Subject: A classic black-and-ivory cinema clapperboard resting with a few ivory screenplay pages. Clapper stripes recognizable, pages show only faint abstract line marks, absolutely no readable text or numbers. A restrained cinematic still life.
+
+## story.png
+
+Use case: stylized-concept. Asset type: horizontal cover for a small video-planning choice card, a standalone image. Style: exquisite minimal cinematic miniature still-life, polished 3D realism, quiet slate-blue studio background, soft warm side light, subtle cool fill, refined tactile materials. Composition: landscape 3:2, centered recognizable hero subject, three-quarter camera, strong clean silhouette readable at tiny size, generous breathing room, no busy details. Constraints: no typography, no readable lettering, no UI, no logos, no brands, no watermark, no frames. Subject: One ivory paper airplane gracefully flying toward a tiny dreamlike floating island with a small archway and softly lit miniature mountains. A subtle curved trail conveys the beginning of an imaginative journey. Clean and simple.
+
+## science.png
+
+Use case: stylized-concept. Asset type: horizontal cover for a small video-planning choice card, a standalone image. Style: exquisite minimal cinematic miniature still-life, polished 3D realism, quiet slate-blue studio background, soft warm side light, subtle cool fill, refined tactile materials. Composition: landscape 3:2, centered recognizable hero subject, three-quarter camera, strong clean silhouette readable at tiny size, generous breathing room, no busy details. Constraints: no typography, no readable lettering, no UI, no logos, no brands, no watermark, no frames. Subject: A beautiful small Earth globe with accurate broad blue oceans and green continents, paired with one delicate orbit-ring scientific model. Sculptural educational still life, instantly recognizable knowledge and discovery, no labels.
+
+## product.png
+
+Use case: stylized-concept. Asset type: horizontal cover for a small video-planning choice card, a standalone image. Style: exquisite minimal cinematic miniature still-life, polished 3D realism, quiet slate-blue studio background, soft warm side light, subtle cool fill, refined tactile materials. Composition: landscape 3:2, centered recognizable hero subject, three-quarter camera, strong clean silhouette readable at tiny size, generous breathing room, no busy details. Constraints: no typography, no readable lettering, no UI, no logos, no brands, no watermark, no frames. Subject: One elegant unbranded frosted glass product bottle with a simple cap on a clean low cylindrical presentation platform. Soft satin reflections, small harmonious geometric support, premium minimal advertising product still life, no label.
+
+## music.png
+
+Use case: stylized-concept. Asset type: horizontal cover for a small video-planning choice card, a standalone image. Style: exquisite minimal cinematic miniature still-life, polished 3D realism, quiet slate-blue studio background, soft warm side light, subtle cool fill, refined tactile materials. Composition: landscape 3:2, centered recognizable hero subject, three-quarter camera, strong clean silhouette readable at tiny size, generous breathing room, no busy details. Constraints: no typography, no readable lettering, no UI, no logos, no brands, no watermark, no frames. Subject: One black vinyl record with a plain warm ivory center label beside a gentle luminous ribbon shaped like a musical waveform. Fine record grooves, elegant and calm musical mood, no letters on label, minimal composition.
+
+## documentary.png
+
+Use case: stylized-concept. Asset type: horizontal cover for a small video-planning choice card, a standalone image. Style: exquisite minimal cinematic miniature still-life, polished 3D realism, quiet slate-blue studio background, soft warm side light, subtle cool fill, refined tactile materials. Composition: landscape 3:2, centered recognizable hero subject, three-quarter camera, strong clean silhouette readable at tiny size, generous breathing room, no busy details. Constraints: no typography, no readable lettering, no UI, no logos, no brands, no watermark, no frames. Subject: One compact professional travel camera on a clean low platform, with a small sculptural mountain landscape behind it. Realistic lens and tactile camera body, documentary journey mood, no logos or lettering.
+
+## storyboard.png
+
+Use case: stylized-concept. Asset type: horizontal cover for a small video-planning choice card, a standalone image. Style: exquisite minimal cinematic miniature still-life, polished 3D realism, quiet slate-blue studio background, soft warm side light, subtle cool fill, refined tactile materials. Composition: landscape 3:2, centered recognizable hero subject, three-quarter camera, strong clean silhouette readable at tiny size, generous breathing room, no busy details. Constraints: no typography, no readable lettering, no UI, no logos, no brands, no watermark, no frames. Subject: Several small ivory storyboard cards neatly laid out in a gentle arc, each containing a very simple grayscale landscape composition, beside one graphite pencil. Clean creative desk still life, no written captions or numbers.
+
