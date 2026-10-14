@@ -1,0 +1,60 @@
+{
+  "base_url": "https://api.moonshot.cn/v1",
+  "model": "kimi-k3",
+  "api_key": "sk-K4LlqAfo5rFETmX9p8a1PBY6Ewi2lKTnf1Gdu3G6FCrstRpF",
+  "temperature": 0.7,
+  "max_tokens": 4096,
+  "timeout": 600,
+  "planning_max_active": 0,
+  "planning_image_max_active": 0,
+  "verify_ssl": true,
+  "llm_max_active": 2,
+  "llm_max_queued": 4,
+  "api_models": [
+    {
+      "id": "Kimi-K3",
+      "name": "Kimi-K3",
+      "base_url": "https://api.moonshot.cn/v1",
+      "model": "kimi-k3",
+      "builtin": true,
+      "api_key": "sk-K4LlqAfo5rFETmX9p8a1PBY6Ewi2lKTnf1Gdu3G6FCrstRpF"
+    },
+    {
+      "id": "Qwen3.8",
+      "name": "Qwen3.8",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3.8-flash",
+      "builtin": true,
+      "api_key": "sk-ws-H.PMRRLRP.bIwA.MEQCIBVl5aOIZfDf3AAFkZ1TfsVp_QP00Wz1mZW7x_Hn8AVhAiAKsIJ_fm40NXOCk429wPAo7Fgi_9SZkk1jOmR-FD847Q"
+    },
+    {
+      "id": "GLM-5.3-Flash",
+      "name": "GLM-5.3-Flash",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "model": "glm-5.3-flash",
+      "builtin": true,
+      "api_key": ""
+    },
+    {
+      "id": "custom_32220_0",
+      "name": "Qwen3.8-omni",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3.8-omni-flash",
+      "builtin": false,
+      "api_key": "sk-ws-H.PRIIHXM.siDd.MEUCIF8hEErtzQPeU22Abc3c4oCLN8LGCqqkYmOxeziLXrRXAiEAkoW33uSMJNmr795aaotnW74dKIwTnBWrdDK00v4pSYc"
+    },
+    {
+      "id": "custom_47400_0",
+      "name": "DeepSeek",
+      "base_url": "https://api.deepseek.com/",
+      "model": "deepseek-flash",
+      "builtin": false,
+      "api_key": "sk-64350be0d74c43b5b860e58eed0d00db"
+    }
+  ],
+  "ai_model_selections": {
+    "planning": "custom_47400_0",
+    "timeline": "custom_47400_0",
+    "editor": "custom_47400_0"
+  }
+}
