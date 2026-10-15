@@ -8,7 +8,7 @@
 // （超时/SSL）+「模型清单」添加按钮；API Key 按模型各自保存（同参考插件 api_models 模式），无全局 Key；
 // 控件走原生视觉——输入框 p-inputtext、按钮/开关逐字取自参考插件实测在打包产物里的 Tailwind 类组合；
 // 自绘样式块只留原生覆盖不到的规则，配色一律 var(--comfy-*/--p-*, 兜底)。
-// 配置真源仍是服务器端 规划/规划器配置.json：面板打开 GET /lvp/llm_config 拉草稿（models 逐条 has_key），
+// 面板打开 GET /lvp/llm_config 拉取用户目录中的配置草稿（models 逐条 has_key），
 // 点「保存」POST 全量清单；api_key 掩码：逐条徽章「已配置/未配置」，留空不回传（后端按 id 沿用旧 Key）。
 // 全局请求超时钳制 120~3600（2026-09-17 下限由 30 提为 120：思考模型规划常超 2 分钟，低下限会误伤）；温度/Max Tokens 不入 UI，走后端默认。
 import { app } from "../../../scripts/app.js";
@@ -510,6 +510,6 @@ export async function 注册规划设置(_app) {
         name: "API 模型配置",
         type: () => 渲染配置面板(宿主),   // 函数型 → 宿主 CustomFormValue 把返回 DOM 挂进设置项
         defaultValue: "",
-        tooltip: "文本与图像API模型独立清单，Key按模型保存；配置写入服务器端规划器配置.json和图像模型配置.json，密钥不下发浏览器、不入库",
+        tooltip: "文本与图像API模型独立清单，Key按模型保存；配置保存在运行ComfyUI的系统用户目录中，密钥不下发浏览器、不随插件文件分享",
     });
 }
