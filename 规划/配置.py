@@ -5,7 +5,6 @@
 设计依据：文档/规格/2026-09-10-H3规划器-设计.md §7.2 + §13；
 按模型密钥契约（2026-09-17）参照 ComfyUI-Artificial-Intelligence 节点/api配置.py 的 api_models 统一清单模式。
 """
-import contextlib
 import ipaddress
 import itertools
 import json
@@ -19,7 +18,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from .本地配置 import 本地配置路径
+from .本地配置 import 本地配置路径, 配置写入锁, 写本地配置
 
 _临时序号 = itertools.count()
 
@@ -29,7 +28,7 @@ def 配置路径() -> str:
 
 
 def 内置预设() -> list:
-    """内置 API 模型预设定义（单一真实源在后端）；经 _迁移模型清单 物化进 api_models（builtin=True）后与自定义同样可编辑。
+    """内置 API 模型预设定义（单一真实源在后端）；预设与自定义模型同样可编辑。
     与 ComfyUI-Artificial-Intelligence 的 BUILTIN_PRESET_DEFS 同构（name/base_url/model）；
     默认项 Kimi-K3 居首（用户指定 2026-09-16）。"""
     return [
@@ -37,12 +36,6 @@ def 内置预设() -> list:
         {"name": "Qwen3.8", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen3.8-flash"},
         {"name": "GLM-5.3-Flash", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-5.3-flash"},
     ]
-
-
-def _净化自定义模型(v) -> list:
-    """custom_models 只留字典且只保留 name/base_url/model 三键（防污染配置盘；仅供旧盘迁移用）。"""
-    return [{k: str(m.get(k) or "") for k in ("name", "base_url", "model")}
-            for m in (v or []) if isinstance(m, dict)]
 
 
 def _规范化端点(url: str) -> str:
@@ -104,30 +97,12 @@ def _净化模型清单(v, 旧清单=None) -> list:
     return 出
 
 
-def _迁移模型清单(盘: dict) -> list:
-    """旧配置盘（custom_models + 全局 api_key）→ 统一 api_models（同参照插件 ensure_seeded 物化思路）：
-    预设行物化为 builtin=True（与自定义同样可编辑、可填 Key）；旧自定义行转 custom 条目；
-    旧全局 Key 挂到地址+模型命中的条目，升级不静默丢密钥。"""
-    出 = [{"id": p["name"], "name": p["name"], "base_url": p["base_url"],
-           "model": p["model"], "builtin": True, "api_key": ""} for p in 内置预设()]
-    for i, m in enumerate(_净化自定义模型(盘.get("custom_models"))):
-        出.append({**m, "id": f"custom_{i}", "builtin": False, "api_key": ""})
-    旧键 = str(盘.get("api_key") or "")
-    if 旧键:
-        for e in 出:
-            if e["base_url"] == (盘.get("base_url") or "") and e["model"] == (盘.get("model") or ""):
-                e["api_key"] = 旧键
-                break
-    return 出
-
-
 def _生效密钥(cfg: dict) -> str:
-    """生效 Key＝选中模型（base_url+model）命中条目的 Key（该条无 Key 即为空）；
-    无命中（旧盘手改地址等遗留配置）保留原值，升级不静默丢密钥。"""
+    """从选中模型条目取得密钥。"""
     for e in cfg.get("api_models") or []:
         if e.get("base_url") == cfg.get("base_url") and e.get("model") == cfg.get("model"):
             return e.get("api_key") or ""
-    return cfg.get("api_key") or ""
+    return ""
 
 
 def _整数配置(cfg: dict, 键: str, 默认: int, 下限: int = None) -> int:
@@ -155,28 +130,27 @@ def 默认配置() -> dict:
         "verify_ssl": True,
         "llm_max_active": 2,                      # 4阶段 B2：进程级同时进行的 LLM 请求数上限
         "llm_max_queued": 4,                      # 4阶段 B2：超过活动数后允许排队的请求数上限，再超返回繁忙
-        "api_models": _迁移模型清单({}),   # 统一模型清单：预设行物化可编辑（同参照插件 api_models）
+        "api_models": [{"id": p["name"], **p, "builtin": True, "api_key": ""} for p in 内置预设()],
         "ai_model_selections": {"planning": "", "timeline": "", "editor": ""},
     }
 
 
 def 读配置() -> dict:
     cfg = 默认配置()
-    盘 = {}
     路径 = 配置路径()
     try:
         with open(路径, "r", encoding="utf-8") as f:
             盘 = json.load(f)
-        if not isinstance(盘, dict):
-            盘 = {}
-    except (OSError, ValueError):
-        盘 = {}                                 # 缺失/损坏 → 静默返回默认（不抛）
-    cfg.update({k: 盘[k] for k in cfg if k in 盘})
-    if isinstance(盘.get("api_models"), list):
-        cfg["api_models"] = _净化模型清单(盘["api_models"])
-    else:
-        cfg["api_models"] = _迁移模型清单(盘)   # 旧盘：custom_models + 全局 api_key → 统一清单
+    except FileNotFoundError:
+        return cfg
+    except (ValueError, UnicodeError):
+        raise ValueError("模型配置损坏，请检查用户目录中的配置文件") from None
+    if not isinstance(盘, dict) or not isinstance(盘.get("api_models"), list):
+        raise ValueError("模型配置须包含api_models模型清单")
+    cfg.update({k: 盘[k] for k in cfg if k in 盘 and k != "api_key"})
+    cfg["api_models"] = _净化模型清单(盘["api_models"])
     cfg["ai_model_selections"] = _净化用途模型(cfg.get("ai_model_selections"), cfg["api_models"])
+    cfg["api_key"] = _生效密钥(cfg)
     return cfg
 
 
@@ -188,30 +162,18 @@ def _净化用途模型(value, models):
 
 
 def 写配置(patch: dict) -> dict:
-    cfg = 读配置()
-    for k, v in (patch or {}).items():
-        if k not in cfg:
-            continue                            # 忽略未知键（防污染）
-        if k == "api_key" and (v is None or v == ""):
-            continue                            # 掩码模式：不回传明文 → 保留原密钥
-        if k == "api_models":
-            v = _净化模型清单(v, 旧清单=cfg["api_models"])
-        cfg[k] = v
-    cfg["ai_model_selections"] = _净化用途模型(cfg.get("ai_model_selections"), cfg["api_models"])
-    cfg["api_key"] = _生效密钥(cfg)              # 生效密钥随选中模型条目派生（调用方 默认opener 零改动）
-    目标 = 配置路径()
-    临时 = f"{目标}.{os.getpid()}.{next(_临时序号)}.part"
-    已落盘 = False
-    try:
-        with open(临时, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-        os.replace(临时, 目标)
-        已落盘 = True
-    finally:
-        if not 已落盘:
-            with contextlib.suppress(OSError):
-                os.remove(临时)
-    return 读配置()
+    with 配置写入锁(配置路径()):
+        cfg = 读配置()
+        for k, v in (patch or {}).items():
+            if k not in cfg or k == "api_key":
+                continue                            # 忽略未知键（防污染）
+            if k == "api_models":
+                v = _净化模型清单(v, 旧清单=cfg["api_models"])
+            cfg[k] = v
+        cfg["ai_model_selections"] = _净化用途模型(cfg.get("ai_model_selections"), cfg["api_models"])
+        cfg["api_key"] = _生效密钥(cfg)              # 生效密钥随选中模型条目派生（调用方 默认opener 零改动）
+        写本地配置(配置路径(), {k: v for k, v in cfg.items() if k != "api_key"})
+        return 读配置()
 
 
 def 测连通性(entry: dict) -> dict:

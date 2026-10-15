@@ -383,7 +383,7 @@ def 注册路由():
     @routes.get("/lvp/llm_config")
     async def 取配置接口(request):
         try:
-            return web.json_response(取脱敏配置())
+            return web.json_response(await asyncio.to_thread(取脱敏配置))
         except Exception as e:
             return web.json_response({"error": f"读配置失败：{e}"}, status=500)
 
@@ -394,8 +394,10 @@ def 注册路由():
         except (json.JSONDecodeError, ValueError):
             return web.json_response({"error": "请求体不是合法 JSON"}, status=400)
         try:
-            写配置(body if isinstance(body, dict) else {})
-            return web.json_response(取脱敏配置())
+            await asyncio.to_thread(写配置, body if isinstance(body, dict) else {})
+            return web.json_response(await asyncio.to_thread(取脱敏配置))
+        except ValueError:
+            return web.json_response({"error": "模型配置无效，请检查填写内容"}, status=400)
         except OSError as e:
             return web.json_response({"error": f"写配置失败：{e}"}, status=500)
 

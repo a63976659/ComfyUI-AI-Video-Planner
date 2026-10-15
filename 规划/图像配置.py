@@ -1,13 +1,10 @@
 # -*- coding: utf-8 -*-
 """独立生图模型清单；只选一个运行模型，不继承文本模型密钥。"""
-import threading
 from urllib.parse import urlsplit
 
 from .配置 import _净化模型清单
-from .本地配置 import 本地配置路径
-from .项目存储 import 读JSON, 写JSON
-
-_锁 = threading.RLock()
+from .本地配置 import 本地配置路径, 配置写入锁, 写本地配置
+from .项目存储 import 读JSON
 
 
 def 配置路径():
@@ -20,13 +17,13 @@ def 默认配置():
 
 
 def 读图像配置():
-    with _锁:
-        if not 配置路径().exists():
-            return 默认配置()
-        data = 读JSON(配置路径())
-        if not isinstance(data, dict) or not isinstance(data.get("models"), list):
-            raise ValueError("图像模型配置损坏，请在设置中重新保存")
-        return {"selected_id": data.get("selected_id", ""), "models": _净化模型清单(data["models"])}
+    path = 配置路径()
+    if not path.exists():
+        return 默认配置()
+    data = 读JSON(path)
+    if not isinstance(data, dict) or not isinstance(data.get("models"), list):
+        raise ValueError("图像模型配置损坏，请在设置中重新保存")
+    return {"selected_id": data.get("selected_id", ""), "models": _净化模型清单(data["models"])}
 
 
 def 脱敏图像配置(data=None):
@@ -40,7 +37,7 @@ def 写图像配置(patch):
         raise ValueError("图像模型清单须包含1到20项")
     if any(not isinstance(m, dict) for m in patch["models"]):
         raise ValueError("图像模型条目须为对象")
-    with _锁:
+    with 配置写入锁(配置路径()):
         old = 读图像配置()
         models = _净化模型清单(patch["models"], old["models"])
         ids = [m["id"] for m in models]
@@ -56,7 +53,7 @@ def 写图像配置(patch):
         if not isinstance(selected, str) or selected not in ids:
             raise ValueError("请选择一个图像模型；运行时不会自动切换其他API")
         result = {"selected_id": selected, "models": models}
-        写JSON(配置路径(), result)
+        写本地配置(配置路径(), result)
         return 脱敏图像配置(result)
 
 
