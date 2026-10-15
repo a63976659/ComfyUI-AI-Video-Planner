@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """独立生图模型清单；只选一个运行模型，不继承文本模型密钥。"""
 import threading
-from pathlib import Path
 from urllib.parse import urlsplit
 
 from .配置 import _净化模型清单
+from .本地配置 import 本地配置路径
 from .项目存储 import 读JSON, 写JSON
 
 _锁 = threading.RLock()
 
 
 def 配置路径():
-    return Path(__file__).with_name("图像模型配置.json")
+    return 本地配置路径("图像模型配置.json")
 
 
 def 默认配置():

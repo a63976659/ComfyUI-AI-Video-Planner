@@ -19,11 +19,13 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from .本地配置 import 本地配置路径
+
 _临时序号 = itertools.count()
 
 
 def 配置路径() -> str:
-    return os.path.join(os.path.dirname(__file__), "规划器配置.json")
+    return str(本地配置路径("规划器配置.json"))
 
 
 def 内置预设() -> list:
@@ -161,8 +163,9 @@ def 默认配置() -> dict:
 def 读配置() -> dict:
     cfg = 默认配置()
     盘 = {}
+    路径 = 配置路径()
     try:
-        with open(配置路径(), "r", encoding="utf-8") as f:
+        with open(路径, "r", encoding="utf-8") as f:
             盘 = json.load(f)
         if not isinstance(盘, dict):
             盘 = {}
