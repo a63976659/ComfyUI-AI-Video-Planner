@@ -68,7 +68,7 @@ Review the draft in **提示词时间轴**. Drag cards to change order or durati
 
 Enable the segments you want to process and click **AI生成提示词**. You can stop generation and keep completed results. When ready, click **填充节点**, then check each segment’s prompt, mode, references and first/last frames in **提示词编辑**.
 
-- **上一步 / 下一步** undo and redo draft edits, keeping up to 20 steps; large drafts may keep fewer.
+- **上一步 / 下一步** keep up to 20 steps in the local `缓存/编辑历史/` folder. Loading a workflow restores history only from a matching cache; workflow files do not include history.
 - **禁用字幕** applies only to prompt generation on the timeline.
 - **提示词优化** rewrites the current segment’s text. **审查标签** checks references that have no matching material.
 
@@ -232,6 +232,7 @@ Entries describe historical behavior. The usage guide above and the newest entri
 
 **2026-10-14**
 
+- Store undo history separately in a local cache, keep it out of workflow files, and retain at most 20 steps.
 - Reorganize both guides, simplify the steps, and clarify material references and single-segment edits.
 - Renamed Invalidation Version to Regeneration Number and clarified reuse and regeneration on the next run.
 
@@ -562,6 +563,10 @@ If this plugin helps you:
 <img width="400" height="500" alt="Donation QR code 1" src="https://github.com/user-attachments/assets/47f64c6e-cc45-4395-9b9e-29f464d12df2" />
 <img width="400" height="500" alt="Donation QR code 2" src="https://github.com/user-attachments/assets/7bfb521a-6f24-4104-89c0-016dcf74834b" />
 
+### Thanks for your support
+
+- Thank you to **石头** (QQ: 34720803) for your suggestions, help, and red packet donation.
+- Thank you to **Sorry全场** (QQ: 473148949) for your red packet donation.
 
 ---
 
