@@ -6,7 +6,8 @@
 
 视频生成使用 ComfyUI 官方 MiniMax H3 节点；AI 规划与提示词改写调用你配置的模型服务。
 
-<img width="1200" alt="视频规划师界面预览" src="https://github.com/user-attachments/assets/5e5c9882-e05d-4367-8268-518ac94d858a" />
+<img width="3833" height="1916" alt="长视频规划师界面03" src="https://github.com/user-attachments/assets/3adb21e5-7f06-4431-b0a2-62f1294b352a" />
+
 
 **快速导航：** [安装](#安装) · [开始使用](#开始使用) · [素材与模型](#素材与模型) · [单段修改与结果复用](#单段修改与结果复用) · [保存与恢复](#保存与恢复) · [常见问题](#常见问题) · [更新记录](#更新记录)
 
