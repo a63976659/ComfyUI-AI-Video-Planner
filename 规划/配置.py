@@ -122,8 +122,6 @@ def 默认配置() -> dict:
         "base_url": 首["base_url"],
         "model": 首["model"],
         "api_key": "",          # 生效密钥：由 _生效密钥 从选中模型条目派生（调用方零改动）
-        "temperature": 0.7,
-        "max_tokens": 4096,
         "timeout": 120,
         "planning_max_active": 0,
         "planning_image_max_active": 0,
@@ -198,9 +196,8 @@ def 测连通性(entry: dict) -> dict:
                 break
     if not 键:
         return {"ok": False, "error": "未填写 API Key"}
-    # 同参照插件 _build_body：不发 temperature/top_p/seed，用各家官方默认——恒发会让个别服务端直接 400
     body = json.dumps({"model": model, "messages": [{"role": "user", "content": "ping"}],
-                       "max_tokens": 8, "stream": False}).encode("utf-8")
+                       "stream": False}).encode("utf-8")
     url = f"{base}/chat/completions"
     ctx = _ssl上下文(cfg, url)
     req = urllib.request.Request(url, data=body,
@@ -221,7 +218,6 @@ def 取脱敏配置() -> dict:
     cfg = 读配置()
     return {
         "base_url": cfg["base_url"], "model": cfg["model"],
-        "temperature": cfg["temperature"], "max_tokens": cfg["max_tokens"],
         "timeout": cfg["timeout"], "verify_ssl": cfg["verify_ssl"],
         "ai_model_selections": cfg["ai_model_selections"],
         # 统一模型清单（预设行 builtin=True）：逐条 has_key，绝不含 api_key 明文/掩码串
@@ -261,7 +257,7 @@ def _错误摘要(e) -> str:
     if not 码:
         return str(e)
     # 同参照插件 _safe_read+_extract_error_detail：读服务端错误回包挖出具体 message，
-    # 只剩 "HTTP 400: Bad Request" 无法定位（如 temperature/seed 恒发被个别服务端拒）
+    # 提取服务端错误详情，避免只显示 HTTP 状态。
     try:
         文 = e.read().decode("utf-8", errors="replace")
     except Exception:
@@ -423,8 +419,6 @@ def 造opener(覆盖=None, 请求回调=None, 停止=None):
         键 = 覆盖.get("api_key")
         if 键 is None:
             键 = cfg.get("api_key") or ""
-        # 同 测连通性/参照插件 _build_body：不发 temperature/top_p/seed，也不发 max_tokens
-        # （思考模型推理会吃掉 token 预算，封顶会截断答复 JSON）。
         body = json.dumps({
             "model": model,
             "messages": [{"role": "system", "content": system},

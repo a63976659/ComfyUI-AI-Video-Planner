@@ -307,9 +307,8 @@ class 异步模型请求:
                 headers["Authorization"] = f"Bearer {cfg['api_key']}"
             if self.规划原件 and urlsplit(base).hostname == "dashscope.aliyuncs.com":
                 headers["X-DashScope-OssResourceResolve"] = "enable"
-            if system.startswith("你是视频内容规划师"):
-                for output_limit in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
-                    options.pop(output_limit, None)
+            for parameter in ("temperature", "max_tokens", "max_completion_tokens", "max_output_tokens"):
+                options.pop(parameter, None)
             url = base + "/chat/completions"
             # 不隐式重试：每一次收费请求都由上层任务预算计数。禁止携凭据跟随重定向。
             if self.请求回调:
